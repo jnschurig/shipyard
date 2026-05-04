@@ -3,7 +3,27 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+
+pub const DEFAULT_VERSIONS_TO_SHOW: u32 = 10;
+pub const MIN_VERSIONS_TO_SHOW: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LastLaunched {
+    pub game_slug: String,
+    pub tag: String,
+}
+
+/// Serializable snapshot of the most recently observed GitHub rate-limit
+/// state. Persisted across restarts so the UI can render quota status before
+/// any new request is made.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RateLimitSnapshot {
+    pub remaining: Option<u32>,
+    pub limit: Option<u32>,
+    /// Unix timestamp (seconds) when the quota resets.
+    pub reset_at_unix: Option<i64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
@@ -19,6 +39,25 @@ pub struct Config {
     /// The filename is relative to the ROM library root.
     #[serde(default)]
     pub slot_assignments: HashMap<String, HashMap<String, String>>,
+
+    /// Maximum number of recent versions to show in the Library Version
+    /// dropdown. Installed versions older than this window are still shown.
+    #[serde(default = "default_versions_to_show")]
+    pub versions_to_show: u32,
+
+    /// (game_slug, tag) of the last successful launch. Used to pre-select the
+    /// Library tab dropdowns on cold start.
+    #[serde(default)]
+    pub last_launched: Option<LastLaunched>,
+
+    /// Most recently observed GitHub rate-limit headers. Persisted so the UI
+    /// can render quota status before any new request runs.
+    #[serde(default)]
+    pub rate_limit_snapshot: Option<RateLimitSnapshot>,
+}
+
+fn default_versions_to_show() -> u32 {
+    DEFAULT_VERSIONS_TO_SHOW
 }
 
 impl Default for Config {
@@ -28,6 +67,9 @@ impl Default for Config {
             library_root: None,
             install_overrides: HashMap::new(),
             slot_assignments: HashMap::new(),
+            versions_to_show: DEFAULT_VERSIONS_TO_SHOW,
+            last_launched: None,
+            rate_limit_snapshot: None,
         }
     }
 }
@@ -57,5 +99,24 @@ impl Config {
                 }
             }
         }
+    }
+
+    /// Remove every assignment referencing `filename` across all games. Returns
+    /// the number of assignments cleared.
+    pub fn clear_assignments_referencing(&mut self, filename: &str) -> usize {
+        let mut cleared = 0;
+        let mut empty_games: Vec<String> = Vec::new();
+        for (game, slots) in self.slot_assignments.iter_mut() {
+            let before = slots.len();
+            slots.retain(|_, fname| fname != filename);
+            cleared += before - slots.len();
+            if slots.is_empty() {
+                empty_games.push(game.clone());
+            }
+        }
+        for g in empty_games {
+            self.slot_assignments.remove(&g);
+        }
+        cleared
     }
 }

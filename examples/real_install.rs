@@ -113,15 +113,12 @@ async fn main() -> anyhow::Result<()> {
     // --- Launch (with symlink reconciliation) ------------------------------
     if do_launch {
         tracing::info!("launching {} via launcher (slot={slot_id})", installed.tag);
-        let mut handle = shipyard::launcher::launch(
-            &installed,
-            game,
-            platform,
-            &config,
-            &rom_library_root,
-        )?;
+        let mut handle =
+            shipyard::launcher::launch(&installed, game, platform, &config, &rom_library_root)?;
         tracing::info!("spawned pid={}", handle.pid());
-        tracing::info!("waiting 8s to confirm process stays alive, then exiting (GUI stays running)…");
+        tracing::info!(
+            "waiting 8s to confirm process stays alive, then exiting (GUI stays running)…"
+        );
         for _ in 0..40 {
             if !handle.is_running() {
                 anyhow::bail!("child exited prematurely");

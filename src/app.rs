@@ -7,6 +7,9 @@ use iced::widget::{
 };
 use iced::{Element, Length, Task};
 
+use chrono::TimeZone;
+
+use crate::config::schema::{MIN_VERSIONS_TO_SHOW, RateLimitSnapshot};
 use crate::config::{Config, Diagnostic};
 use crate::games::{self as games_mod, Game};
 use crate::github::{self, RateLimitStatus, Release};
@@ -16,7 +19,7 @@ use crate::platform::Platform;
 use crate::roms::cached_assets;
 use crate::roms::library::{self as rom_library, RomEntry};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallState {
     Idle,
     Installing,
@@ -27,6 +30,8 @@ pub enum InstallState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Library,
+    Roms,
+    Mods,
     Settings,
 }
 
@@ -55,11 +60,25 @@ pub enum Message {
     ImportRomClicked,
     RomImported(Result<RomEntry, String>),
     DeleteRomClicked(String),
+    DeleteRomConfirm(String),
+    DeleteRomCancel,
     AssignSlotChanged {
         game_slug: String,
         slot_id: String,
         filename: Option<String>,
     },
+
+    GameSelected(String),
+    VersionSelected(String),
+    PrimaryActionClicked,
+    ToggleGearMenu,
+    DismissPopovers,
+    ManualRefreshClicked,
+    UninstallSelectedClicked,
+    ClearCacheSelectedClicked,
+    ToggleImportedRomsExpander,
+    VersionsToShowInputChanged(String),
+    VersionsToShowSubmit,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +88,12 @@ pub enum Modal {
         tag: String,
         game_slug: String,
         planned: Vec<crate::roms::cached_assets::PlannedClear>,
+    },
+    DeleteRomConfirm {
+        filename: String,
+    },
+    UninstallConfirm {
+        tag: String,
     },
 }
 
@@ -112,9 +137,15 @@ pub struct App {
     modal: Modal,
 
     library_root_input: String,
+    versions_to_show_input: String,
 
     rom_library_root: PathBuf,
     roms: Vec<RomEntry>,
+
+    selected_game_slug: String,
+    selected_tag: Option<String>,
+    gear_menu_open: bool,
+    imported_roms_expanded: bool,
 }
 
 impl App {
@@ -164,6 +195,31 @@ impl App {
             install_states.insert(v.tag.clone(), InstallState::Installed);
         }
 
+        let initial_rate_limit = config
+            .rate_limit_snapshot
+            .as_ref()
+            .map(|s| RateLimitStatus {
+                remaining: s.remaining,
+                limit: s.limit,
+                reset_at: s
+                    .reset_at_unix
+                    .and_then(|t| chrono::Utc.timestamp_opt(t, 0).single()),
+            })
+            .unwrap_or_default();
+
+        let selected_game_slug = config
+            .last_launched
+            .as_ref()
+            .map(|l| l.game_slug.clone())
+            .unwrap_or_else(|| {
+                games_mod::registry()
+                    .first()
+                    .map(|g| g.slug().to_string())
+                    .unwrap_or_default()
+            });
+        let selected_tag = config.last_launched.as_ref().map(|l| l.tag.clone());
+        let versions_to_show_input = config.versions_to_show.to_string();
+
         let app = Self {
             config,
             config_path,
@@ -177,13 +233,18 @@ impl App {
             releases: Vec::new(),
             install_states,
             running: HashMap::new(),
-            rate_limit: RateLimitStatus::default(),
+            rate_limit: initial_rate_limit,
             banners,
             tab: Tab::Library,
             modal: Modal::Closed,
             library_root_input,
+            versions_to_show_input,
             rom_library_root,
             roms,
+            selected_game_slug,
+            selected_tag,
+            gear_menu_open: false,
+            imported_roms_expanded: false,
         };
 
         let client_for_fetch = client;
@@ -205,6 +266,139 @@ impl App {
         match message {
             Message::TabSelected(t) => {
                 self.tab = t;
+                self.modal = Modal::Closed;
+                self.gear_menu_open = false;
+                Task::none()
+            }
+            Message::DismissPopovers => {
+                self.gear_menu_open = false;
+                Task::none()
+            }
+            Message::ToggleGearMenu => {
+                self.gear_menu_open = !self.gear_menu_open;
+                Task::none()
+            }
+            Message::ToggleImportedRomsExpander => {
+                self.imported_roms_expanded = !self.imported_roms_expanded;
+                Task::none()
+            }
+            Message::GameSelected(slug) => {
+                self.selected_game_slug = slug;
+                self.selected_tag = None;
+                Task::none()
+            }
+            Message::VersionSelected(tag) => {
+                self.selected_tag = Some(tag);
+                Task::none()
+            }
+            Message::PrimaryActionClicked => {
+                self.gear_menu_open = false;
+                let Some(tag) = self.selected_tag.clone() else {
+                    return Task::none();
+                };
+                let installed = self
+                    .installed
+                    .iter()
+                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug);
+                if installed {
+                    self.update(Message::LaunchClicked(tag))
+                } else {
+                    self.update(Message::InstallClicked(tag))
+                }
+            }
+            Message::ManualRefreshClicked => {
+                self.gear_menu_open = false;
+                if let (Some(remaining), Some(reset_unix)) =
+                    (self.rate_limit.remaining, self.rate_limit.reset_at)
+                    && remaining == 0
+                    && reset_unix > chrono::Utc::now()
+                {
+                    self.banners.push(Banner::RateLimited(format!(
+                        "GitHub rate limit reached. Try again at {}.",
+                        reset_unix.with_timezone(&chrono::Local).format("%H:%M:%S")
+                    )));
+                    return Task::none();
+                }
+                let Some(game) = game_for_slug(&self.selected_game_slug) else {
+                    return Task::none();
+                };
+                let client = self.client.clone();
+                let repo = game.repo_slug().to_string();
+                Task::perform(
+                    async move { client.list_releases(&repo).await.map_err(|e| e.to_string()) },
+                    Message::ReleasesLoaded,
+                )
+            }
+            Message::UninstallSelectedClicked => {
+                self.gear_menu_open = false;
+                let Some(tag) = self.selected_tag.clone() else {
+                    return Task::none();
+                };
+                if !self
+                    .installed
+                    .iter()
+                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug)
+                {
+                    return Task::none();
+                }
+                self.modal = Modal::UninstallConfirm { tag };
+                Task::none()
+            }
+            Message::ClearCacheSelectedClicked => {
+                self.gear_menu_open = false;
+                let Some(tag) = self.selected_tag.clone() else {
+                    return Task::none();
+                };
+                self.update(Message::ClearCachedAssetsClicked(tag))
+            }
+            Message::VersionsToShowInputChanged(s) => {
+                self.versions_to_show_input = s;
+                Task::none()
+            }
+            Message::VersionsToShowSubmit => {
+                match self.versions_to_show_input.trim().parse::<u32>() {
+                    Ok(n) if n >= MIN_VERSIONS_TO_SHOW => {
+                        if self.config.versions_to_show != n {
+                            self.config.versions_to_show = n;
+                            if let Err(e) = self.config.save_to(&self.config_path) {
+                                self.banners
+                                    .push(Banner::Error(format!("save config: {e}")));
+                            } else {
+                                self.banners
+                                    .push(Banner::Info(format!("versions to show set to {n}")));
+                            }
+                        }
+                    }
+                    _ => {
+                        self.versions_to_show_input = self.config.versions_to_show.to_string();
+                        self.banners.push(Banner::Error(format!(
+                            "versions to show must be an integer >= {MIN_VERSIONS_TO_SHOW}"
+                        )));
+                    }
+                }
+                Task::none()
+            }
+            Message::DeleteRomConfirm(filename) => {
+                let cleared = self.config.clear_assignments_referencing(&filename);
+                if cleared > 0
+                    && let Err(e) = self.config.save_to(&self.config_path)
+                {
+                    self.banners
+                        .push(Banner::Error(format!("save config: {e}")));
+                }
+                if let Err(e) = rom_library::delete(&self.rom_library_root, &filename) {
+                    self.banners
+                        .push(Banner::Error(format!("delete {filename}: {e}")));
+                } else {
+                    self.banners
+                        .push(Banner::Info(format!("deleted {filename}")));
+                    self.refresh_rom_list();
+                }
+                self.modal = Modal::Closed;
+                Task::none()
+            }
+            Message::DeleteRomCancel => {
+                self.modal = Modal::Closed;
                 Task::none()
             }
             Message::ReleasesLoaded(Ok((releases, rl))) => {
@@ -215,6 +409,7 @@ impl App {
                 }
                 self.releases = releases;
                 self.rate_limit = rl;
+                self.persist_rate_limit_snapshot(rl);
                 Task::none()
             }
             Message::ReleasesLoaded(Err(e)) => {
@@ -283,11 +478,8 @@ impl App {
                 Task::none()
             }
             Message::UninstallClicked(tag) => {
-                if self
-                    .running
-                    .get_mut(&tag)
-                    .is_some_and(|h| h.is_running())
-                {
+                self.modal = Modal::Closed;
+                if self.running.get_mut(&tag).is_some_and(|h| h.is_running()) {
                     self.banners.push(Banner::Info(format!(
                         "cannot uninstall {tag}: still running"
                     )));
@@ -304,25 +496,33 @@ impl App {
                 Task::none()
             }
             Message::LaunchClicked(tag) => {
-                if self
-                    .running
-                    .get_mut(&tag)
-                    .is_some_and(|h| h.is_running())
-                {
+                if self.running.get_mut(&tag).is_some_and(|h| h.is_running()) {
                     return Task::none();
                 }
                 let Some(installed) = self.installed.iter().find(|v| v.tag == tag).cloned() else {
                     return Task::none();
                 };
+                let game = game_for_slug(&installed.game_slug).unwrap_or(self.game);
                 match launcher::launch(
                     &installed,
-                    self.game,
+                    game,
                     self.platform,
                     &self.config,
                     &self.rom_library_root,
                 ) {
                     Ok(handle) => {
-                        self.running.insert(tag, handle);
+                        self.running.insert(tag.clone(), handle);
+                        let last = crate::config::schema::LastLaunched {
+                            game_slug: installed.game_slug.clone(),
+                            tag: tag.clone(),
+                        };
+                        if self.config.last_launched.as_ref() != Some(&last) {
+                            self.config.last_launched = Some(last);
+                            if let Err(e) = self.config.save_to(&self.config_path) {
+                                self.banners
+                                    .push(Banner::Error(format!("save config: {e}")));
+                            }
+                        }
                     }
                     Err(e) => {
                         self.banners
@@ -338,7 +538,8 @@ impl App {
             Message::SaveSettings => {
                 self.config.library_root = Some(PathBuf::from(&self.library_root_input));
                 if let Err(e) = self.config.save_to(&self.config_path) {
-                    self.banners.push(Banner::Error(format!("save config: {e}")));
+                    self.banners
+                        .push(Banner::Error(format!("save config: {e}")));
                 } else {
                     self.banners
                         .push(Banner::Info("settings saved".to_string()));
@@ -354,9 +555,8 @@ impl App {
                 };
                 let planned = cached_assets::plan_clear(game, &installed.path, self.platform);
                 if planned.is_empty() {
-                    self.banners.push(Banner::Info(format!(
-                        "{tag}: no cached assets to clear"
-                    )));
+                    self.banners
+                        .push(Banner::Info(format!("{tag}: no cached assets to clear")));
                     return Task::none();
                 }
                 self.modal = Modal::ClearCachedConfirm {
@@ -382,10 +582,8 @@ impl App {
                     result.deleted.len()
                 )));
                 for (path, e) in result.failures {
-                    self.banners.push(Banner::Error(format!(
-                        "clear {}: {e}",
-                        path.display()
-                    )));
+                    self.banners
+                        .push(Banner::Error(format!("clear {}: {e}", path.display())));
                 }
                 self.modal = Modal::Closed;
                 Task::none()
@@ -429,21 +627,7 @@ impl App {
                 Task::none()
             }
             Message::DeleteRomClicked(filename) => {
-                if let Some((game_slug, slot_id)) = self.find_assignment_for(&filename) {
-                    let display = display_name_for_slot(&game_slug, &slot_id)
-                        .unwrap_or_else(|| format!("{game_slug}/{slot_id}"));
-                    self.banners.push(Banner::Error(format!(
-                        "cannot delete {filename}: assigned to {display}"
-                    )));
-                    return Task::none();
-                }
-                if let Err(e) = rom_library::delete(&self.rom_library_root, &filename) {
-                    self.banners
-                        .push(Banner::Error(format!("delete {filename}: {e}")));
-                } else {
-                    self.banners.push(Banner::Info(format!("deleted {filename}")));
-                    self.refresh_rom_list();
-                }
+                self.modal = Modal::DeleteRomConfirm { filename };
                 Task::none()
             }
             Message::AssignSlotChanged {
@@ -466,20 +650,35 @@ impl App {
         self.roms = rom_library::list(&self.rom_library_root).unwrap_or_default();
     }
 
-    fn find_assignment_for(&self, filename: &str) -> Option<(String, String)> {
-        for (game_slug, slots) in &self.config.slot_assignments {
-            for (slot_id, fname) in slots {
-                if fname == filename {
-                    return Some((game_slug.clone(), slot_id.clone()));
-                }
-            }
+    /// Update `Config.rate_limit_snapshot` from a freshly-observed
+    /// `RateLimitStatus`. Persists only when `remaining` or `reset_at` actually
+    /// changed vs. the prior snapshot, to avoid one disk write per refresh
+    /// tick.
+    fn persist_rate_limit_snapshot(&mut self, rl: RateLimitStatus) {
+        let new_reset_unix = rl.reset_at.map(|d| d.timestamp());
+        let changed = match &self.config.rate_limit_snapshot {
+            Some(prev) => prev.remaining != rl.remaining || prev.reset_at_unix != new_reset_unix,
+            None => rl.remaining.is_some() || rl.limit.is_some() || new_reset_unix.is_some(),
+        };
+        if !changed {
+            return;
         }
-        None
+        self.config.rate_limit_snapshot = Some(RateLimitSnapshot {
+            remaining: rl.remaining,
+            limit: rl.limit,
+            reset_at_unix: new_reset_unix,
+        });
+        if let Err(e) = self.config.save_to(&self.config_path) {
+            self.banners
+                .push(Banner::Error(format!("save rate-limit snapshot: {e}")));
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
         let tabs = row![
             tab_button("Library", self.tab == Tab::Library, Tab::Library),
+            tab_button("Roms", self.tab == Tab::Roms, Tab::Roms),
+            tab_button("Mods", self.tab == Tab::Mods, Tab::Mods),
             tab_button("Settings", self.tab == Tab::Settings, Tab::Settings),
         ]
         .spacing(8);
@@ -495,6 +694,8 @@ impl App {
 
         let body: Element<_> = match self.tab {
             Tab::Library => self.library_view(),
+            Tab::Roms => self.roms_view(),
+            Tab::Mods => self.mods_view(),
             Tab::Settings => self.settings_view(),
         };
 
@@ -542,147 +743,198 @@ impl App {
     }
 
     fn library_view(&self) -> Element<'_, Message> {
-        let rows = self.releases.iter().map(|r| {
-            let state = self
-                .install_states
-                .get(&r.tag_name)
-                .cloned()
-                .unwrap_or(InstallState::Idle);
-            let status_label = match &state {
-                InstallState::Idle => "available".to_string(),
-                InstallState::Installing => "installing…".to_string(),
-                InstallState::Installed => "installed".to_string(),
-                InstallState::Failed(e) => format!("failed: {e}"),
-            };
-            let action: Element<_> = match &state {
-                InstallState::Installed => {
-                    let install_dir = self
-                        .installed
-                        .iter()
-                        .find(|v| v.tag == r.tag_name)
-                        .map(|v| v.path.clone());
-                    let launch_btn = button("Launch")
-                        .on_press(Message::LaunchClicked(r.tag_name.clone()));
-                    let has_cached = install_dir
-                        .as_deref()
-                        .map(|p| {
-                            cached_assets::scan_cached_assets(self.game, p, self.platform)
-                                .iter()
-                                .any(|c| c.status.is_present())
-                        })
-                        .unwrap_or(false);
-                    let mut clear_btn = button("Clear cache");
-                    if has_cached {
-                        clear_btn = clear_btn
-                            .on_press(Message::ClearCachedAssetsClicked(r.tag_name.clone()));
-                    }
-                    row![
-                        launch_btn,
-                        clear_btn,
-                        button("Uninstall")
-                            .on_press(Message::UninstallClicked(r.tag_name.clone())),
-                    ]
-                    .spacing(6)
-                    .into()
-                }
-                InstallState::Installing => text("…").into(),
-                _ => button("Install")
-                    .on_press(Message::InstallClicked(r.tag_name.clone()))
-                    .into(),
-            };
-            row![
-                text(&r.tag_name).width(Length::FillPortion(2)),
-                text(status_label).width(Length::FillPortion(2)),
-                action,
-            ]
-            .spacing(12)
-            .into()
+        let games: Vec<GameChoice> = games_mod::registry()
+            .iter()
+            .map(|g| GameChoice {
+                slug: g.slug().to_string(),
+                display_name: g.display_name().to_string(),
+            })
+            .collect();
+        let selected_game = games
+            .iter()
+            .find(|g| g.slug == self.selected_game_slug)
+            .cloned()
+            .or_else(|| games.first().cloned());
+
+        let versions = self.versions_for_selected_game();
+        let selected_version = self
+            .selected_tag
+            .as_ref()
+            .and_then(|t| versions.iter().find(|v| v.tag == *t).cloned())
+            .or_else(|| versions.first().cloned());
+
+        let game_pick = pick_list(games, selected_game, |g: GameChoice| {
+            Message::GameSelected(g.slug)
         });
-        scrollable(column(rows).spacing(6)).height(Length::Fill).into()
-    }
+        let version_pick = pick_list(
+            versions.clone(),
+            selected_version.clone(),
+            |v: VersionChoice| Message::VersionSelected(v.tag),
+        );
 
-    fn settings_view(&self) -> Element<'_, Message> {
-        let rate = match self.rate_limit.remaining {
-            Some(r) => format!(
-                "GitHub rate limit: {r}/{}",
-                self.rate_limit.limit.unwrap_or(0)
-            ),
-            None => "GitHub rate limit: unknown".to_string(),
+        let primary_label = match (&selected_version, self.selected_install_state()) {
+            (Some(_), Some(InstallState::Installing)) => "Installing…",
+            (Some(v), _) if v.installed => "Launch",
+            (Some(_), _) => "Install",
+            (None, _) => "Launch",
         };
-        let token_status = if std::env::var("GITHUB_TOKEN").is_ok_and(|v| !v.is_empty()) {
-            "GITHUB_TOKEN: set"
-        } else {
-            "GITHUB_TOKEN: not set"
-        };
-
-        let mut body: iced::widget::Column<'_, Message> = column![
-            text("Library root").size(14),
-            text_input("path", &self.library_root_input)
-                .on_input(Message::LibraryRootInputChanged),
-            row![button("Save").on_press(Message::SaveSettings)].spacing(6),
-        ]
-        .spacing(8);
-
-        body = body.push(section_header("Cached assets per install"));
-        if self.installed.is_empty() {
-            body = body.push(text("(no installed versions)").size(12));
-        } else {
-            for v in &self.installed {
-                let game = match game_for_slug(&v.game_slug) {
-                    Some(g) => g,
-                    None => continue,
-                };
-                let cached = cached_assets::scan_cached_assets(game, &v.path, self.platform);
-                let summary = cached
-                    .iter()
-                    .filter_map(|c| match &c.status {
-                        cached_assets::CachedAssetStatus::Present { filename, .. } => {
-                            Some(filename.to_string())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let summary_text = if summary.is_empty() {
-                    "(no cached files)".to_string()
-                } else {
-                    summary
-                };
-                body = body.push(
-                    column![
-                        text(format!("{} {} — {}", game.display_name(), v.tag, v.path.display()))
-                            .size(13),
-                        text(summary_text).size(12),
-                    ]
-                    .spacing(4),
-                );
-            }
+        let mut primary = button(text(primary_label).size(14));
+        if matches!(
+            self.selected_install_state(),
+            Some(InstallState::Installing)
+        ) {
+            // disabled while installing
+        } else if selected_version.is_some() {
+            primary = primary.on_press(Message::PrimaryActionClicked);
         }
 
-        body = body.push(section_header("ROM Library"));
-        body = body.push(
-            row![button("Import ROM…").on_press(Message::ImportRomClicked)].spacing(6),
-        );
-        if self.roms.is_empty() {
-            body = body.push(text("(no ROMs imported)").size(12));
+        let gear = button(text("⚙").size(16)).on_press(Message::ToggleGearMenu);
+
+        let top_row = row![game_pick, version_pick, primary, gear].spacing(8);
+
+        let mut body: iced::widget::Column<'_, Message> =
+            column![text(self.game_title_label()).size(20), top_row].spacing(12);
+
+        if self.gear_menu_open {
+            body = body.push(self.gear_menu());
+        }
+
+        scrollable(body).height(Length::Fill).into()
+    }
+
+    fn gear_menu(&self) -> Element<'_, Message> {
+        let installed = self.selected_install_state() == Some(InstallState::Installed);
+        let tooltip_text = "Available only for installed versions.";
+
+        let clear_btn = if installed {
+            button(text("Clear Cache")).on_press(Message::ClearCacheSelectedClicked)
         } else {
-            for r in &self.roms {
-                let filename = r.filename.clone();
-                body = body.push(
-                    row![
-                        text(format!("{} ({} bytes)", r.filename, r.size))
-                            .width(Length::Fill)
-                            .size(12),
-                        button("Delete").on_press(Message::DeleteRomClicked(filename)),
-                    ]
-                    .spacing(6),
-                );
+            button(text("Clear Cache"))
+        };
+        let uninstall_btn = if installed {
+            button(text("Uninstall")).on_press(Message::UninstallSelectedClicked)
+        } else {
+            button(text("Uninstall"))
+        };
+        let refresh_btn =
+            button(text("Check for new versions")).on_press(Message::ManualRefreshClicked);
+
+        let clear_el: Element<_> = if installed {
+            clear_btn.into()
+        } else {
+            iced::widget::tooltip(
+                clear_btn,
+                container(text(tooltip_text).size(12)).padding(6),
+                iced::widget::tooltip::Position::Right,
+            )
+            .into()
+        };
+        let uninstall_el: Element<_> = if installed {
+            uninstall_btn.into()
+        } else {
+            iced::widget::tooltip(
+                uninstall_btn,
+                container(text(tooltip_text).size(12)).padding(6),
+                iced::widget::tooltip::Position::Right,
+            )
+            .into()
+        };
+
+        container(column![clear_el, uninstall_el, refresh_btn].spacing(4))
+            .padding(8)
+            .style(|theme: &iced::Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(iced::Background::Color(palette.background.weak.color)),
+                    border: iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            })
+            .into()
+    }
+
+    fn game_title_label(&self) -> String {
+        game_for_slug(&self.selected_game_slug)
+            .map(|g| g.display_name().to_string())
+            .unwrap_or_else(|| "Shipyard".to_string())
+    }
+
+    fn selected_install_state(&self) -> Option<InstallState> {
+        let tag = self.selected_tag.as_ref()?;
+        self.install_states.get(tag).cloned()
+    }
+
+    /// Compute the version list for the Library dropdown: most recent N
+    /// releases plus any installed version older than that window. Sorted with
+    /// the latest first (matches GitHub's own ordering).
+    fn versions_for_selected_game(&self) -> Vec<VersionChoice> {
+        let n = self.config.versions_to_show.max(MIN_VERSIONS_TO_SHOW) as usize;
+        let recent_tags: Vec<&str> = self
+            .releases
+            .iter()
+            .take(n)
+            .map(|r| r.tag_name.as_str())
+            .collect();
+        let mut tags: Vec<String> = recent_tags.iter().map(|s| s.to_string()).collect();
+        for inst in &self.installed {
+            if inst.game_slug == self.selected_game_slug && !tags.iter().any(|t| t == &inst.tag) {
+                tags.push(inst.tag.clone());
+            }
+        }
+        let latest_tag = self.releases.first().map(|r| r.tag_name.clone());
+        tags.into_iter()
+            .map(|tag| {
+                let installed = self
+                    .installed
+                    .iter()
+                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug);
+                let latest = latest_tag.as_ref() == Some(&tag);
+                VersionChoice {
+                    tag,
+                    installed,
+                    latest,
+                }
+            })
+            .collect()
+    }
+
+    fn roms_view(&self) -> Element<'_, Message> {
+        let import_btn = button(text("Import Rom")).on_press(Message::ImportRomClicked);
+        let mut body: iced::widget::Column<'_, Message> = column![import_btn].spacing(12);
+
+        let expander_label = if self.imported_roms_expanded {
+            format!("▾ Imported Roms ({})", self.roms.len())
+        } else {
+            format!("▸ Imported Roms ({})", self.roms.len())
+        };
+        body = body.push(
+            button(text(expander_label).size(14)).on_press(Message::ToggleImportedRomsExpander),
+        );
+
+        if self.imported_roms_expanded {
+            if self.roms.is_empty() {
+                body = body.push(text("(none)").size(12));
+            } else {
+                for r in &self.roms {
+                    let filename = r.filename.clone();
+                    body = body.push(
+                        row![
+                            text(r.filename.clone()).width(Length::Fill).size(12),
+                            button(text("✕")).on_press(Message::DeleteRomClicked(filename)),
+                        ]
+                        .spacing(6),
+                    );
+                }
             }
         }
 
         body = body.push(section_header("Slot Assignments"));
         for game in games_mod::registry() {
-            body = body.push(text(game.display_name()).size(13));
+            body = body.push(text(game.rom_group_name()).size(14));
             for slot in game.slots() {
                 let current = self
                     .config
@@ -705,14 +957,62 @@ impl App {
                     }
                 });
                 body = body.push(
-                    row![text(slot.display_name).width(Length::Fill).size(12), picker]
-                        .spacing(6),
+                    row![text(slot.display_name).width(Length::Fill).size(12), picker].spacing(6),
                 );
             }
         }
 
-        body = body.push(text(rate).size(12));
-        body = body.push(text(token_status).size(12));
+        scrollable(body).height(Length::Fill).into()
+    }
+
+    fn mods_view(&self) -> Element<'_, Message> {
+        container(text("Mod management is coming soon™.").size(16))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn settings_view(&self) -> Element<'_, Message> {
+        let rate = match (
+            self.rate_limit.remaining,
+            self.rate_limit.limit,
+            self.rate_limit.reset_at,
+        ) {
+            (Some(r), Some(lim), Some(reset)) => format!(
+                "GitHub rate limit: {r}/{lim}, resets at {}",
+                reset.with_timezone(&chrono::Local).format("%H:%M:%S")
+            ),
+            (Some(r), Some(lim), None) => format!("GitHub rate limit: {r}/{lim}"),
+            (Some(r), None, _) => format!("GitHub rate limit: {r} remaining"),
+            _ => "GitHub rate limit: unknown".to_string(),
+        };
+        let token_status = if std::env::var("GITHUB_TOKEN").is_ok_and(|v| !v.is_empty()) {
+            "GITHUB_TOKEN: set"
+        } else {
+            "GITHUB_TOKEN: not set"
+        };
+
+        let body: iced::widget::Column<'_, Message> = column![
+            text("Versions to show").size(14),
+            row![
+                text_input("10", &self.versions_to_show_input)
+                    .on_input(Message::VersionsToShowInputChanged)
+                    .on_submit(Message::VersionsToShowSubmit)
+                    .width(Length::Fixed(120.0)),
+                button("Apply").on_press(Message::VersionsToShowSubmit),
+            ]
+            .spacing(6),
+            text("Library root").size(14),
+            text_input("path", &self.library_root_input).on_input(Message::LibraryRootInputChanged),
+            text("Existing installs are not moved when you change this.").size(11),
+            row![button("Save").on_press(Message::SaveSettings)].spacing(6),
+            section_header("GitHub"),
+            text(rate).size(12),
+            text(token_status).size(12),
+        ]
+        .spacing(8);
 
         scrollable(body).height(Length::Fill).into()
     }
@@ -720,17 +1020,21 @@ impl App {
     fn modal_view(&self) -> Element<'_, Message> {
         match &self.modal {
             Modal::Closed => column![].into(),
-            Modal::ClearCachedConfirm { tag, game_slug, planned } => {
-                let copy = "These files live in this install's directory and only affect this version.";
+            Modal::ClearCachedConfirm {
+                tag,
+                game_slug,
+                planned,
+            } => {
+                let copy =
+                    "These files live in this install's directory and only affect this version.";
                 let mut col = column![
                     text(format!("Clear cached assets for {game_slug} {tag}?")).size(14),
                     text(copy).size(12),
                 ]
                 .spacing(6);
                 for p in planned {
-                    col = col.push(
-                        text(format!("• {} ({} bytes)", p.path.display(), p.size)).size(12),
-                    );
+                    col = col
+                        .push(text(format!("• {} ({} bytes)", p.path.display(), p.size)).size(12));
                 }
                 let tag_owned = tag.clone();
                 col.push(
@@ -740,6 +1044,35 @@ impl App {
                     ]
                     .spacing(6),
                 )
+                .into()
+            }
+            Modal::DeleteRomConfirm { filename } => {
+                let f = filename.clone();
+                column![
+                    text(format!("Delete ROM \"{filename}\"?")).size(14),
+                    text("This removes the file from your ROM library and clears any slot assignments referencing it.")
+                        .size(12),
+                    row![
+                        button("Delete").on_press(Message::DeleteRomConfirm(f)),
+                        button("Cancel").on_press(Message::DeleteRomCancel),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(6)
+                .into()
+            }
+            Modal::UninstallConfirm { tag } => {
+                let t = tag.clone();
+                column![
+                    text(format!("Uninstall {tag}?")).size(14),
+                    text("This deletes the install directory.").size(12),
+                    row![
+                        button("Uninstall").on_press(Message::UninstallClicked(t)),
+                        button("Cancel").on_press(Message::ClearCachedAssetsCancel),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(6)
                 .into()
             }
         }
@@ -774,10 +1107,36 @@ fn game_for_slug(slug: &str) -> Option<&'static dyn Game> {
         .find(|g| g.slug() == slug)
 }
 
-fn display_name_for_slot(game_slug: &str, slot_id: &str) -> Option<String> {
-    let game = game_for_slug(game_slug)?;
-    let slot = game.slots().iter().find(|s| s.id == slot_id)?;
-    Some(format!("{} / {}", game.display_name(), slot.display_name))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameChoice {
+    slug: String,
+    display_name: String,
+}
+
+impl std::fmt::Display for GameChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.display_name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionChoice {
+    tag: String,
+    installed: bool,
+    latest: bool,
+}
+
+impl std::fmt::Display for VersionChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.tag)?;
+        if self.latest {
+            f.write_str(" (latest)")?;
+        }
+        if self.installed {
+            f.write_str(" ✓")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -946,11 +1305,12 @@ mod tests {
         let cache_path = dir.path().join("etags.json");
 
         let (_server, _releases_url, _dl_url) = serve_asset(b"ignored-archive-bytes").await;
-        let client =
-            Arc::new(github::Client::with_base(cache_path, _server.uri()).unwrap());
+        let client = Arc::new(github::Client::with_base(cache_path, _server.uri()).unwrap());
 
-        let mut config = Config::default();
-        config.library_root = Some(library_root.clone());
+        let config = Config {
+            library_root: Some(library_root.clone()),
+            ..Config::default()
+        };
 
         let (mut app, _startup) = App::new(AppDeps {
             config,
@@ -1016,7 +1376,10 @@ mod tests {
         let args_file = library_root.join("1.0.0").join("args.txt");
         let args = std::fs::read_to_string(&args_file).expect("mock game should have run");
         // Launcher passes no extra args beyond what the binary itself sees.
-        assert!(!args.contains("--baserompath"), "no rom flag should be passed");
+        assert!(
+            !args.contains("--baserompath"),
+            "no rom flag should be passed"
+        );
     }
 
     #[tokio::test]
@@ -1065,11 +1428,14 @@ mod tests {
         let config_path = dir.path().join("config.yaml");
 
         let (_server, _releases_url, _dl_url) = serve_asset(b"x").await;
-        let client =
-            Arc::new(github::Client::with_base(dir.path().join("etags.json"), _server.uri()).unwrap());
+        let client = Arc::new(
+            github::Client::with_base(dir.path().join("etags.json"), _server.uri()).unwrap(),
+        );
 
-        let mut config = Config::default();
-        config.library_root = Some(library_root.clone());
+        let config = Config {
+            library_root: Some(library_root.clone()),
+            ..Config::default()
+        };
 
         let (mut app, _startup) = App::new(AppDeps {
             config,
@@ -1152,6 +1518,92 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(!install_dir.join("oot.z64").exists(), "symlink should be gone");
+        assert!(
+            !install_dir.join("oot.z64").exists(),
+            "symlink should be gone"
+        );
+    }
+
+    fn make_app(dir: &tempfile::TempDir, config: Config) -> App {
+        let client = Arc::new(
+            github::Client::with_base(
+                dir.path().join("etags.json"),
+                "http://127.0.0.1:1".to_string(),
+            )
+            .unwrap(),
+        );
+        let (app, _startup) = App::new(AppDeps {
+            config,
+            config_path: dir.path().join("config.yaml"),
+            library_root: dir.path().join("library"),
+            rom_library_root: dir.path().join("roms"),
+            download_dir: dir.path().join("dl"),
+            cache_dir: dir.path().to_path_buf(),
+            game: static_game(),
+            platform: static_platform(),
+            client,
+            startup_diagnostics: vec![],
+        });
+        app
+    }
+
+    #[tokio::test]
+    async fn tab_switch_dismisses_modal_and_gear_popover() {
+        let dir = tempdir().unwrap();
+        let mut app = make_app(&dir, Config::default());
+        app.modal = Modal::DeleteRomConfirm {
+            filename: "rom.z64".into(),
+        };
+        app.gear_menu_open = true;
+        let _ = app.update(Message::TabSelected(Tab::Roms));
+        assert!(matches!(app.modal, Modal::Closed));
+        assert!(!app.gear_menu_open);
+    }
+
+    #[tokio::test]
+    async fn delete_rom_confirm_clears_assignments_across_games() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("roms")).unwrap();
+        std::fs::write(dir.path().join("roms/shared.z64"), b"x").unwrap();
+        let mut config = Config::default();
+        config.set_assignment("fake", "oot", Some("shared.z64".to_string()));
+        config.set_assignment("other", "slot", Some("shared.z64".to_string()));
+        let mut app = make_app(&dir, config);
+        app.refresh_rom_list();
+        let _ = app.update(Message::DeleteRomConfirm("shared.z64".to_string()));
+        assert!(app.config.assignment_for("fake", "oot").is_none());
+        assert!(app.config.assignment_for("other", "slot").is_none());
+        assert!(matches!(app.modal, Modal::Closed));
+    }
+
+    #[tokio::test]
+    async fn cold_start_preselects_last_launched() {
+        let dir = tempdir().unwrap();
+        let config = Config {
+            last_launched: Some(crate::config::schema::LastLaunched {
+                game_slug: "fake".to_string(),
+                tag: "v9".to_string(),
+            }),
+            ..Config::default()
+        };
+        let app = make_app(&dir, config);
+        assert_eq!(app.selected_game_slug, "fake");
+        assert_eq!(app.selected_tag.as_deref(), Some("v9"));
+    }
+
+    #[tokio::test]
+    async fn versions_to_show_invalid_input_keeps_previous_value() {
+        let dir = tempdir().unwrap();
+        let mut app = make_app(&dir, Config::default());
+        let original = app.config.versions_to_show;
+        let _ = app.update(Message::VersionsToShowInputChanged("0".into()));
+        let _ = app.update(Message::VersionsToShowSubmit);
+        assert_eq!(app.config.versions_to_show, original);
+        let _ = app.update(Message::VersionsToShowInputChanged("not-a-number".into()));
+        let _ = app.update(Message::VersionsToShowSubmit);
+        assert_eq!(app.config.versions_to_show, original);
+        let _ = app.update(Message::VersionsToShowInputChanged("3".into()));
+        let _ = app.update(Message::VersionsToShowSubmit);
+        assert_eq!(app.config.versions_to_show, 3);
     }
 }

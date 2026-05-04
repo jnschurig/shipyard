@@ -35,11 +35,8 @@ fn main() -> iced::Result {
 
         if let Some(pending) = loaded.pending_migration.take() {
             let rom_lib_root = roms::library::library_root(platform);
-            let mut migration_diags = roms::library::apply_pending_migration(
-                &rom_lib_root,
-                &mut loaded.config,
-                pending,
-            );
+            let mut migration_diags =
+                roms::library::apply_pending_migration(&rom_lib_root, &mut loaded.config, pending);
             diagnostics.append(&mut migration_diags);
             if let Err(e) = loaded.config.save_to(&loaded.path) {
                 tracing::warn!(error = %e, "failed to persist migrated config");

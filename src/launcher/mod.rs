@@ -169,8 +169,7 @@ mod tests {
 
         let config = Config::default();
         let lib_root = dir.path().join("rom-library");
-        let mut handle =
-            launch(&installed, &game, &FakePlatform, &config, &lib_root).unwrap();
+        let mut handle = launch(&installed, &game, &FakePlatform, &config, &lib_root).unwrap();
         assert!(handle.pid() > 0);
 
         for _ in 0..50 {

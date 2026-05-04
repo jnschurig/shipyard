@@ -30,6 +30,15 @@ pub trait Game: Send + Sync {
     fn repo_slug(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
 
+    /// User-facing label for the underlying game whose ROMs the slots accept.
+    /// Distinct from `display_name` (which names the launcher/port). For
+    /// example, the SoH port's `display_name` is "Ship of Harkinian" while
+    /// `rom_group_name` is "Ocarina of Time". Defaults to `display_name` for
+    /// games where the two coincide.
+    fn rom_group_name(&self) -> &'static str {
+        self.display_name()
+    }
+
     /// Where the game writes cached ROM archives (`.o2r` / `.otr`).
     fn data_dir(&self, install_dir: &Path, platform: &dyn Platform) -> PathBuf;
 

@@ -47,6 +47,10 @@ impl Game for Soh {
         "Ship of Harkinian"
     }
 
+    fn rom_group_name(&self) -> &'static str {
+        "Ocarina of Time"
+    }
+
     fn data_dir(&self, install_dir: &Path, _platform: &dyn Platform) -> PathBuf {
         install_dir.to_path_buf()
     }

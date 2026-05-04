@@ -209,9 +209,9 @@ impl Config {
     }
 }
 
-/// Produce a v4 `Config` and a `PendingMigration` describing filesystem work
-/// (ROM imports) that must happen during startup before the new config is
-/// considered fully migrated. Pure: never touches the filesystem.
+/// Produce a current-schema `Config` and a `PendingMigration` describing
+/// filesystem work (ROM imports) that must happen during startup before the
+/// new config is considered fully migrated. Pure: never touches the filesystem.
 fn migrate(from_version: u32, raw: &serde_yaml::Value) -> (Config, PendingMigration) {
     let mut config = Config::default();
 
@@ -456,6 +456,48 @@ mod tests {
         let reloaded = Config::load_from(&path).unwrap();
         assert!(reloaded.pending_migration.is_none());
         assert_eq!(reloaded.config.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v4_migrates_to_v5_with_defaults_for_new_fields() {
+        use crate::config::schema::DEFAULT_VERSIONS_TO_SHOW;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "schema_version: 4\nlibrary_root: /lib\nslot_assignments:\n  soh:\n    oot: oot.z64\n",
+        )
+        .unwrap();
+
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.config.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.config.library_root, Some(PathBuf::from("/lib")));
+        assert_eq!(loaded.config.assignment_for("soh", "oot"), Some("oot.z64"));
+        assert_eq!(loaded.config.versions_to_show, DEFAULT_VERSIONS_TO_SHOW);
+        assert!(loaded.config.last_launched.is_none());
+        assert!(loaded.config.rate_limit_snapshot.is_none());
+    }
+
+    #[test]
+    fn fresh_default_uses_documented_defaults() {
+        use crate::config::schema::DEFAULT_VERSIONS_TO_SHOW;
+        let cfg = Config::default();
+        assert_eq!(cfg.versions_to_show, DEFAULT_VERSIONS_TO_SHOW);
+        assert!(cfg.last_launched.is_none());
+        assert!(cfg.rate_limit_snapshot.is_none());
+    }
+
+    #[test]
+    fn clear_assignments_referencing_drops_every_match() {
+        let mut cfg = Config::default();
+        cfg.set_assignment("soh", "oot", Some("rom.z64".to_string()));
+        cfg.set_assignment("soh", "oot-mq", Some("rom.z64".to_string()));
+        cfg.set_assignment("soh", "other", Some("kept.z64".to_string()));
+        let cleared = cfg.clear_assignments_referencing("rom.z64");
+        assert_eq!(cleared, 2);
+        assert_eq!(cfg.assignment_for("soh", "oot"), None);
+        assert_eq!(cfg.assignment_for("soh", "oot-mq"), None);
+        assert_eq!(cfg.assignment_for("soh", "other"), Some("kept.z64"));
     }
 
     #[test]

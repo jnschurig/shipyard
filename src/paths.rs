@@ -127,14 +127,8 @@ mod tests {
     fn expands_dollar_var_and_braced() {
         let _g = ENV_LOCK.lock().unwrap();
         let _u = EnvGuard::set("SHIPYARD_TEST_USER", "jules");
-        assert_eq!(
-            expand("/home/$SHIPYARD_TEST_USER/x"),
-            "/home/jules/x"
-        );
-        assert_eq!(
-            expand("/home/${SHIPYARD_TEST_USER}_bkp"),
-            "/home/jules_bkp"
-        );
+        assert_eq!(expand("/home/$SHIPYARD_TEST_USER/x"), "/home/jules/x");
+        assert_eq!(expand("/home/${SHIPYARD_TEST_USER}_bkp"), "/home/jules_bkp");
     }
 
     #[test]
