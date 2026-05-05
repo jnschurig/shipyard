@@ -178,11 +178,17 @@ mod tests {
         let mut config = Config::default();
         config.set_assignment("soh", SLOT_OOT, Some("a.z64".into()));
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
-        assert_eq!(fs::read(install.join("oot.z64")).unwrap(), fs::read(&a).unwrap());
+        assert_eq!(
+            fs::read(install.join("oot.z64")).unwrap(),
+            fs::read(&a).unwrap()
+        );
 
         config.set_assignment("soh", SLOT_OOT, Some("b.z64".into()));
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
-        assert_eq!(fs::read(install.join("oot.z64")).unwrap(), fs::read(&b).unwrap());
+        assert_eq!(
+            fs::read(install.join("oot.z64")).unwrap(),
+            fs::read(&b).unwrap()
+        );
     }
 
     #[test]

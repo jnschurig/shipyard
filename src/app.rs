@@ -19,6 +19,12 @@ use crate::platform::Platform;
 use crate::roms::cached_assets;
 use crate::roms::library::{self as rom_library, RomEntry};
 
+// Standard button widths per visual family. Visual-only; not covered by tests.
+const TAB_BUTTON_WIDTH: f32 = 90.0;
+const GEAR_MENU_BUTTON_WIDTH: f32 = 210.0;
+const MODAL_BUTTON_WIDTH: f32 = 96.0;
+const PRIMARY_ACTION_BUTTON_WIDTH: f32 = 140.0;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallState {
     Idle,
@@ -47,6 +53,7 @@ pub enum Message {
     TabSelected(Tab),
     ReleasesLoaded(Result<(Vec<Release>, RateLimitStatus), String>),
     InstallClicked(String),
+    InstallProgress(String, Option<u8>),
     InstallFinished(String, Result<InstalledVersion, String>),
     UninstallClicked(String),
     LaunchClicked(String),
@@ -130,6 +137,7 @@ pub struct App {
     installed: Vec<InstalledVersion>,
     releases: Vec<Release>,
     install_states: HashMap<String, InstallState>,
+    install_progress: HashMap<String, Option<u8>>,
     running: HashMap<String, LaunchHandle>,
     rate_limit: RateLimitStatus,
     banners: Vec<Banner>,
@@ -232,6 +240,7 @@ impl App {
             installed,
             releases: Vec::new(),
             install_states,
+            install_progress: HashMap::new(),
             running: HashMap::new(),
             rate_limit: initial_rate_limit,
             banners,
@@ -460,6 +469,7 @@ impl App {
                 };
                 self.install_states
                     .insert(tag.clone(), InstallState::Installing);
+                self.install_progress.insert(tag.clone(), None);
 
                 let client = self.client.clone();
                 let platform = self.platform;
@@ -467,30 +477,86 @@ impl App {
                 let download_dir = self.download_dir.clone();
                 let tag_out = tag.clone();
 
-                Task::perform(
-                    async move {
-                        library::install(
-                            &client,
-                            InstallRequest {
-                                game,
-                                release: &release,
-                                platform,
-                                library_root: &library_root,
-                                destination_override: None,
-                                download_dir: &download_dir,
-                            },
-                            None,
-                        )
-                        .await
-                        .map(|(v, _)| v)
-                        .map_err(|e| e.to_string())
-                    },
-                    move |res| Message::InstallFinished(tag_out.clone(), res),
-                )
+                Task::stream(iced::stream::channel(16, move |mut output| async move {
+                    use futures_util::SinkExt;
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<library::InstallProgress>(32);
+
+                    let mut output_fwd = output.clone();
+                    let tag_fwd = tag_out.clone();
+                    let forwarder = tokio::spawn(async move {
+                        let mut last_pct: Option<u8> = None;
+                        let mut last_was_indeterminate = false;
+                        while let Some(p) = rx.recv().await {
+                            let msg = match p {
+                                library::InstallProgress::Downloading {
+                                    downloaded,
+                                    total: Some(total),
+                                } if total > 0 => {
+                                    let pct =
+                                        ((downloaded.saturating_mul(100)) / total).min(100) as u8;
+                                    if last_pct == Some(pct) {
+                                        continue;
+                                    }
+                                    last_pct = Some(pct);
+                                    last_was_indeterminate = false;
+                                    Some(Message::InstallProgress(tag_fwd.clone(), Some(pct)))
+                                }
+                                library::InstallProgress::Downloading { .. } => {
+                                    if last_was_indeterminate {
+                                        continue;
+                                    }
+                                    last_was_indeterminate = true;
+                                    last_pct = None;
+                                    Some(Message::InstallProgress(tag_fwd.clone(), None))
+                                }
+                                library::InstallProgress::Starting
+                                | library::InstallProgress::Extracting
+                                | library::InstallProgress::Finalizing => {
+                                    last_pct = None;
+                                    last_was_indeterminate = false;
+                                    Some(Message::InstallProgress(tag_fwd.clone(), None))
+                                }
+                                library::InstallProgress::Done(_) => None,
+                            };
+                            if let Some(m) = msg {
+                                let _ = output_fwd.send(m).await;
+                            }
+                        }
+                    });
+
+                    let result = library::install(
+                        &client,
+                        InstallRequest {
+                            game,
+                            release: &release,
+                            platform,
+                            library_root: &library_root,
+                            destination_override: None,
+                            download_dir: &download_dir,
+                        },
+                        Some(tx),
+                    )
+                    .await
+                    .map(|(v, _)| v)
+                    .map_err(|e| e.to_string());
+
+                    let _ = forwarder.await;
+                    let _ = output.send(Message::InstallFinished(tag_out, result)).await;
+                }))
+            }
+            Message::InstallProgress(tag, pct) => {
+                if matches!(
+                    self.install_states.get(&tag),
+                    Some(InstallState::Installing)
+                ) {
+                    self.install_progress.insert(tag, pct);
+                }
+                Task::none()
             }
             Message::InstallFinished(tag, Ok(version)) => {
                 self.install_states
                     .insert(tag.clone(), InstallState::Installed);
+                self.install_progress.remove(&tag);
                 if !self.installed.iter().any(|v| v.tag == version.tag) {
                     self.installed.push(version);
                 }
@@ -499,6 +565,7 @@ impl App {
             Message::InstallFinished(tag, Err(e)) => {
                 self.install_states
                     .insert(tag.clone(), InstallState::Failed(e.clone()));
+                self.install_progress.remove(&tag);
                 self.banners
                     .push(Banner::Error(format!("install {tag} failed: {e}")));
                 Task::none()
@@ -805,13 +872,19 @@ impl App {
             |v: VersionChoice| Message::VersionSelected(v.tag),
         );
 
-        let primary_label = match (&selected_version, self.selected_install_state()) {
-            (Some(_), Some(InstallState::Installing)) => "Installing…",
-            (Some(v), _) if v.installed => "Launch",
-            (Some(_), _) => "Install",
-            (None, _) => "Launch",
+        let primary_label: String = match (&selected_version, self.selected_install_state()) {
+            (Some(v), Some(InstallState::Installing)) => {
+                match self.install_progress.get(&v.tag).copied().flatten() {
+                    Some(pct) => format!("Installing… {pct}%"),
+                    None => "Installing…".to_string(),
+                }
+            }
+            (Some(v), _) if v.installed => "Launch".to_string(),
+            (Some(_), _) => "Install".to_string(),
+            (None, _) => "Launch".to_string(),
         };
-        let mut primary = button(text(primary_label).size(14));
+        let mut primary =
+            button(text(primary_label).size(14)).width(Length::Fixed(PRIMARY_ACTION_BUTTON_WIDTH));
         if matches!(
             self.selected_install_state(),
             Some(InstallState::Installing)
@@ -840,17 +913,22 @@ impl App {
         let tooltip_text = "Available only for installed versions.";
 
         let clear_btn = if installed {
-            button(text("Clear Cache")).on_press(Message::ClearCacheSelectedClicked)
-        } else {
             button(text("Clear Cache"))
+                .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
+                .on_press(Message::ClearCacheSelectedClicked)
+        } else {
+            button(text("Clear Cache")).width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
         };
         let uninstall_btn = if installed {
-            button(text("Uninstall")).on_press(Message::UninstallSelectedClicked)
-        } else {
             button(text("Uninstall"))
+                .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
+                .on_press(Message::UninstallSelectedClicked)
+        } else {
+            button(text("Uninstall")).width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
         };
-        let refresh_btn =
-            button(text("Check for new versions")).on_press(Message::ManualRefreshClicked);
+        let refresh_btn = button(text("Check for new versions"))
+            .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
+            .on_press(Message::ManualRefreshClicked);
 
         let clear_el: Element<_> = if installed {
             clear_btn.into()
@@ -1072,8 +1150,12 @@ impl App {
                 let tag_owned = tag.clone();
                 col.push(
                     row![
-                        button("Confirm").on_press(Message::ClearCachedAssetsConfirm(tag_owned)),
-                        button("Cancel").on_press(Message::ClearCachedAssetsCancel),
+                        button("Confirm")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::ClearCachedAssetsConfirm(tag_owned)),
+                        button("Cancel")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::ClearCachedAssetsCancel),
                     ]
                     .spacing(6),
                 )
@@ -1086,8 +1168,12 @@ impl App {
                     text("This removes the file from your ROM library and clears any slot assignments referencing it.")
                         .size(12),
                     row![
-                        button("Delete").on_press(Message::DeleteRomConfirm(f)),
-                        button("Cancel").on_press(Message::DeleteRomCancel),
+                        button("Delete")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::DeleteRomConfirm(f)),
+                        button("Cancel")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::DeleteRomCancel),
                     ]
                     .spacing(6),
                 ]
@@ -1100,8 +1186,12 @@ impl App {
                     text(format!("Uninstall {tag}?")).size(14),
                     text("This deletes the install directory.").size(12),
                     row![
-                        button("Uninstall").on_press(Message::UninstallClicked(t)),
-                        button("Cancel").on_press(Message::ClearCachedAssetsCancel),
+                        button("Uninstall")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::UninstallClicked(t)),
+                        button("Cancel")
+                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
+                            .on_press(Message::ClearCachedAssetsCancel),
                     ]
                     .spacing(6),
                 ]
@@ -1201,7 +1291,7 @@ impl std::fmt::Display for SlotChoice {
 }
 
 fn tab_button(label: &str, selected: bool, tab: Tab) -> Element<'_, Message> {
-    let mut b = button(text(label));
+    let mut b = button(text(label)).width(Length::Fixed(TAB_BUTTON_WIDTH));
     if !selected {
         b = b.on_press(Message::TabSelected(tab));
     }

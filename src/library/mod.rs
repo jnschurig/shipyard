@@ -143,11 +143,14 @@ pub async fn install(
         .pick_asset(&release.assets, platform)
         .ok_or_else(|| anyhow!("no asset for {} on this platform", release.tag_name))?;
 
-    let dest_final = destination_override.clone().map(|p| expand_path(&p)).unwrap_or_else(|| {
-        expand_path(library_root)
-            .join(game.slug())
-            .join(&release.tag_name)
-    });
+    let dest_final = destination_override
+        .clone()
+        .map(|p| expand_path(&p))
+        .unwrap_or_else(|| {
+            expand_path(library_root)
+                .join(game.slug())
+                .join(&release.tag_name)
+        });
     let dest_partial = partial_path(&dest_final);
 
     if dest_final.exists() {
