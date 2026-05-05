@@ -34,7 +34,7 @@ pub fn reconcile(
         match config.assignment_for(game.slug(), slot.id) {
             Some(filename) => {
                 let target = library_root.join(filename);
-                place_copy(&symlink_path, &target)?;
+                place_symlink(&symlink_path, &target)?;
             }
             None => match std::fs::remove_file(&symlink_path) {
                 Ok(()) => {}
@@ -46,31 +46,30 @@ pub fn reconcile(
     Ok(())
 }
 
-/// Copy `target` to `dest` atomically (copy → rename), unless `dest` already
-/// matches `target` by size (cheap proxy for "same file"). ROMs are large
-/// enough that an unconditional copy on every launch is wasteful, but content
-/// hashing is overkill — size is a strong-enough signal because the user's
-/// only way to change the assigned ROM is via the picker, which assigns a
-/// different filename.
-///
-/// Symlinks were considered but rejected: some HarbourMasters ports (notably
-/// 2Ship) don't follow them reliably during first-run ROM extraction.
-fn place_copy(dest: &Path, target: &Path) -> io::Result<()> {
-    let target_meta = std::fs::metadata(target)?;
-    if let Ok(dest_meta) = std::fs::metadata(dest)
-        && dest_meta.is_file()
-        && dest_meta.len() == target_meta.len()
+/// Place a symlink at `dest` pointing at `target`, atomically (symlink → rename).
+/// No-ops when an existing symlink at `dest` already points at `target`.
+#[cfg(unix)]
+fn place_symlink(dest: &Path, target: &Path) -> io::Result<()> {
+    use std::os::unix::fs::symlink;
+    if let Ok(existing) = std::fs::read_link(dest)
+        && existing == target
     {
         return Ok(());
     }
 
     let tmp = dest.with_extension("z64.tmp");
     let _ = std::fs::remove_file(&tmp);
-    std::fs::copy(target, &tmp)?;
+    symlink(target, &tmp)?;
     if let Err(e) = std::fs::rename(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn place_symlink(_dest: &Path, _target: &Path) -> io::Result<()> {
+    tracing::warn!("symlink reconciliation is not implemented on this platform");
     Ok(())
 }
 
@@ -113,22 +112,21 @@ mod tests {
     }
 
     #[test]
-    fn missing_cached_and_assigned_creates_copy() {
+    fn missing_cached_and_assigned_creates_symlink() {
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
         let lib = dir.path().join("lib");
-        let _target = make_rom(&lib, "oot.z64");
+        let target = make_rom(&lib, "oot.z64");
 
         let mut config = Config::default();
         config.set_assignment("soh", SLOT_OOT, Some("oot.z64".into()));
 
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
 
-        let copy = install.join("oot.z64");
-        assert!(copy.is_file());
-        assert!(!copy.is_symlink());
-        assert_eq!(fs::read(&copy).unwrap(), b"rom-bytes");
+        let link = install.join("oot.z64");
+        assert!(link.is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), target);
         // oot-mq is unassigned → no file created
         assert!(!install.join("oot-mq.z64").exists());
     }

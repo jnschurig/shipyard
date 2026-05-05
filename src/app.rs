@@ -1531,12 +1531,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
 
-        let copy = install_dir.join("oot.z64");
-        assert!(copy.is_file(), "expected oot.z64 copy in install dir");
-        assert!(!copy.is_symlink());
+        let link = install_dir.join("oot.z64");
+        assert!(link.is_symlink(), "expected oot.z64 symlink in install dir");
         assert_eq!(
-            std::fs::read(&copy).unwrap(),
-            std::fs::read(rom_library_root.join("oot.z64")).unwrap()
+            std::fs::read_link(&link).unwrap(),
+            rom_library_root.join("oot.z64")
         );
 
         // Clear the assignment, relaunch, symlink should be removed.
