@@ -1,6 +1,4 @@
-use std::path::{Path, PathBuf};
-
-use anyhow::Result;
+use std::path::PathBuf;
 
 pub mod linux;
 pub mod macos;
@@ -10,7 +8,6 @@ pub trait Platform: Send + Sync {
     fn config_dir(&self) -> PathBuf;
     fn cache_dir(&self) -> PathBuf;
     fn asset_keyword(&self) -> &'static str;
-    fn extract(&self, archive: &Path, dest: &Path) -> Result<()>;
 }
 
 #[cfg(target_os = "macos")]
@@ -28,7 +25,7 @@ pub fn current() -> &'static dyn Platform {
     compile_error!("unsupported target OS");
 }
 
-fn project_dirs() -> directories::ProjectDirs {
+pub(crate) fn project_dirs() -> directories::ProjectDirs {
     directories::ProjectDirs::from("", "", "Shipyard")
         .expect("no home directory available for Shipyard")
 }

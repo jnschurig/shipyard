@@ -151,9 +151,6 @@ mod tests {
         fn asset_keyword(&self) -> &'static str {
             "Linux"
         }
-        fn extract(&self, _: &Path, _: &Path) -> anyhow::Result<()> {
-            Ok(())
-        }
     }
 
     fn write(dir: &Path, name: &str, body: &[u8]) {

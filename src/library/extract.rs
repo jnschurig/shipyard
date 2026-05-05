@@ -1,8 +1,8 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// Unzip every entry into `dest`. Preserves relative paths, creates parents.
 pub fn unzip(archive: &Path, dest: &Path) -> Result<()> {
@@ -36,6 +36,121 @@ pub fn unzip(archive: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Find the first direct child of `dir` whose extension (case-insensitive) matches `ext`.
+pub fn find_first_with_ext(dir: &Path, ext: &str) -> Result<PathBuf> {
+    for entry in fs::read_dir(dir)? {
+        let e = entry?;
+        let p = e.path();
+        if p.extension()
+            .and_then(|s| s.to_str())
+            .map(str::to_ascii_lowercase)
+            == Some(ext.to_ascii_lowercase())
+        {
+            return Ok(p);
+        }
+    }
+    Err(anyhow!("no .{ext} file found in {}", dir.display()))
+}
+
+/// Recursively walk `dir` and return the first entry (file or dir) whose
+/// extension (case-insensitive) matches `ext`. Used to locate artifacts
+/// inside zips that nest the payload one folder deep (e.g. 2Ship's
+/// `2Ship-X-Linux/2ship.appimage`).
+pub fn find_first_with_ext_recursive(dir: &Path, ext: &str) -> Result<PathBuf> {
+    fn walk(dir: &Path, ext: &str) -> io::Result<Option<PathBuf>> {
+        for entry in fs::read_dir(dir)? {
+            let e = entry?;
+            let p = e.path();
+            if p.extension()
+                .and_then(|s| s.to_str())
+                .map(str::to_ascii_lowercase)
+                == Some(ext.to_ascii_lowercase())
+            {
+                return Ok(Some(p));
+            }
+            // Recurse into directories that don't themselves match (e.g. the
+            // top-level wrapper folder). `.app` bundles match via extension
+            // and are returned without descending into them.
+            if p.is_dir()
+                && let Some(found) = walk(&p, ext)?
+            {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+    walk(dir, ext)?.ok_or_else(|| anyhow!("no .{ext} file found under {}", dir.display()))
+}
+
+/// Recursively copy `src` to `dst` using `cp -R`. Used for `.app` bundles on macOS.
+#[cfg(unix)]
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    use anyhow::bail;
+    use std::process::Command;
+    let out = Command::new("cp")
+        .arg("-R")
+        .arg(src)
+        .arg(dst)
+        .output()
+        .context("spawn cp")?;
+    if !out.status.success() {
+        bail!("cp failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(())
+}
+
+/// macOS-only: mount a DMG read-only at a temporary mount point. The returned
+/// guard detaches the DMG when dropped.
+#[cfg(target_os = "macos")]
+pub fn mount_dmg(dmg: &Path) -> Result<MountGuard> {
+    use anyhow::bail;
+    use std::process::Command;
+    let mount_dir = tempfile::tempdir().context("mktemp dmg mount dir")?.keep();
+    let out = Command::new("hdiutil")
+        .args([
+            "attach",
+            "-nobrowse",
+            "-readonly",
+            "-noverify",
+            "-mountpoint",
+        ])
+        .arg(&mount_dir)
+        .arg(dmg)
+        .output()
+        .context("spawn hdiutil")?;
+    if !out.status.success() {
+        bail!(
+            "hdiutil attach failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(MountGuard {
+        mount_point: mount_dir,
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub struct MountGuard {
+    pub mount_point: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MountGuard {
+    fn drop(&mut self) {
+        use std::process::Command;
+        let out = Command::new("hdiutil")
+            .args(["detach", "-quiet"])
+            .arg(&self.mount_point)
+            .output();
+        if let Err(e) = out {
+            tracing::warn!(
+                "hdiutil detach failed for {}: {e}",
+                self.mount_point.display()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +190,17 @@ mod tests {
             fs::read(dest.join("inner/thing.bin")).unwrap(),
             b"\x01\x02\x03"
         );
+    }
+
+    #[test]
+    fn find_recursive_descends_into_wrapper_folder() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("wrapper");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("readme.txt"), b"x").unwrap();
+        fs::write(nested.join("payload.appimage"), b"x").unwrap();
+
+        let found = find_first_with_ext_recursive(dir.path(), "appimage").unwrap();
+        assert_eq!(found, nested.join("payload.appimage"));
     }
 }

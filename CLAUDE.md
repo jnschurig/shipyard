@@ -43,4 +43,4 @@ Toolchain pinned in `rust-toolchain.toml` (1.90.0, edition 2024).
 - Banner-driven error UX: surface failures by pushing onto `App.banners`, not modal dialogs (modals are reserved for destructive confirms like clear-cache).
 - Tests prefer real filesystems via `tempfile::tempdir()` and real subprocesses (`/usr/bin/true`, shell shims) over mocks. `wiremock` is used for HTTP only.
 - The launcher detaches via `setsid()` (Unix `pre_exec`) so closing Shipyard doesn't kill running games.
-- Long-form design docs live in `.local/docs/<feature>/{01-requirements,02-plan}.md` (the `/dev` workflow). They are authoritative for *why* things were built the way they were; the code is authoritative for *what* exists now.
+- Long-form design docs live in `.local/docs/<feature>/{01-requirements,02-plan}.md` (the `/spec-and-dev` workflow). They are authoritative for *why* things were built the way they were; the code is authoritative for *what* exists now.

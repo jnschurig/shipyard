@@ -114,9 +114,6 @@ mod tests {
         fn asset_keyword(&self) -> &'static str {
             "Mac"
         }
-        fn extract(&self, _: &Path, _: &Path) -> anyhow::Result<()> {
-            Ok(())
-        }
     }
 
     /// Game whose launch command runs a caller-supplied binary, so tests can
@@ -152,6 +149,9 @@ mod tests {
         }
         fn launch_command(&self, _: &Path, _: &dyn Platform) -> Command {
             Command::new(&self.bin)
+        }
+        fn extract(&self, _: &Path, _: &Path, _: &dyn Platform) -> anyhow::Result<()> {
+            Ok(())
         }
     }
 

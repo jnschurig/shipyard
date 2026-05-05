@@ -32,8 +32,10 @@ pub enum InstallProgress {
     Done(InstalledVersion),
 }
 
-/// Walk `library_root` one level deep plus every path in `config.install_overrides`,
-/// read manifests, return every directory that has a valid `.shipyard-install.json`.
+/// Walk `library_root` (one or two levels deep) plus every path in
+/// `config.install_overrides`, read manifests, return every directory that has
+/// a valid `.shipyard-install.json`. Supports both the legacy flat layout
+/// (`versions/<tag>/`) and the partitioned layout (`versions/<game_slug>/<tag>/`).
 pub fn scan(library_root: &Path, config: &Config) -> Vec<InstalledVersion> {
     let mut found = Vec::new();
     let library_root = expand_path(library_root);
@@ -43,10 +45,24 @@ pub fn scan(library_root: &Path, config: &Config) -> Vec<InstalledVersion> {
     {
         for entry in read.flatten() {
             let p = entry.path();
-            if p.is_dir()
-                && let Some(v) = read_version(&p)
-            {
+            if !p.is_dir() {
+                continue;
+            }
+            if let Some(v) = read_version(&p) {
                 found.push(v);
+                continue;
+            }
+            // No manifest at this level — try one level deeper for the
+            // partitioned layout (`<library_root>/<game_slug>/<tag>/`).
+            if let Ok(inner) = fs::read_dir(&p) {
+                for sub in inner.flatten() {
+                    let sp = sub.path();
+                    if sp.is_dir()
+                        && let Some(v) = read_version(&sp)
+                    {
+                        found.push(v);
+                    }
+                }
             }
         }
     }
@@ -127,10 +143,11 @@ pub async fn install(
         .pick_asset(&release.assets, platform)
         .ok_or_else(|| anyhow!("no asset for {} on this platform", release.tag_name))?;
 
-    let dest_final = destination_override
-        .clone()
-        .map(|p| expand_path(&p))
-        .unwrap_or_else(|| expand_path(library_root).join(&release.tag_name));
+    let dest_final = destination_override.clone().map(|p| expand_path(&p)).unwrap_or_else(|| {
+        expand_path(library_root)
+            .join(game.slug())
+            .join(&release.tag_name)
+    });
     let dest_partial = partial_path(&dest_final);
 
     if dest_final.exists() {
@@ -174,7 +191,7 @@ pub async fn install(
     let extract_result = (|| -> Result<()> {
         fs::create_dir_all(&dest_partial)
             .with_context(|| format!("create partial {}", dest_partial.display()))?;
-        platform.extract(&archive_path, &dest_partial)?;
+        game.extract(&archive_path, &dest_partial, platform)?;
         let manifest = InstallManifest {
             tag: release.tag_name.clone(),
             game_slug: game.slug().to_string(),
@@ -307,16 +324,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    struct FakePlatform {
-        fail: AtomicBool,
-    }
-    impl FakePlatform {
-        fn new() -> Self {
-            Self {
-                fail: AtomicBool::new(false),
-            }
-        }
-    }
+    struct FakePlatform;
     impl crate::platform::Platform for FakePlatform {
         fn default_library_root(&self) -> PathBuf {
             PathBuf::from("/tmp/fake")
@@ -330,17 +338,18 @@ mod tests {
         fn asset_keyword(&self) -> &'static str {
             "Mac"
         }
-        fn extract(&self, _archive: &Path, dest: &Path) -> Result<()> {
-            if self.fail.load(Ordering::SeqCst) {
-                return Err(anyhow!("synthetic extraction failure"));
-            }
-            fs::create_dir_all(dest)?;
-            fs::write(dest.join("payload.txt"), b"ok")?;
-            Ok(())
-        }
     }
 
-    struct FakeGame;
+    struct FakeGame {
+        fail_extract: AtomicBool,
+    }
+    impl FakeGame {
+        fn new() -> Self {
+            Self {
+                fail_extract: AtomicBool::new(false),
+            }
+        }
+    }
     impl Game for FakeGame {
         fn slug(&self) -> &'static str {
             "soh"
@@ -369,6 +378,19 @@ mod tests {
         }
         fn launch_command(&self, _: &Path, _: &dyn crate::platform::Platform) -> Command {
             Command::new("true")
+        }
+        fn extract(
+            &self,
+            _archive: &Path,
+            dest: &Path,
+            _: &dyn crate::platform::Platform,
+        ) -> Result<()> {
+            if self.fail_extract.load(Ordering::SeqCst) {
+                return Err(anyhow!("synthetic extraction failure"));
+            }
+            fs::create_dir_all(dest)?;
+            fs::write(dest.join("payload.txt"), b"ok")?;
+            Ok(())
         }
     }
 
@@ -406,8 +428,8 @@ mod tests {
         let (_server, url) = setup_server_with_asset(b"archive-body").await;
         let client = github::Client::with_base(cache, _server.uri()).unwrap();
         let release = fixture_release(&url);
-        let plat = FakePlatform::new();
-        let game = FakeGame;
+        let plat = FakePlatform;
+        let game = FakeGame::new();
 
         let (installed, override_out) = install(
             &client,
@@ -425,13 +447,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(installed.tag, "9.2.3");
-        assert_eq!(installed.path, lib.join("9.2.3"));
+        assert_eq!(installed.path, lib.join("soh").join("9.2.3"));
         assert!(installed.path.join("payload.txt").exists());
         assert!(installed.path.join(manifest::MANIFEST_FILE).exists());
         assert!(override_out.is_none());
 
         // partial directory should be gone
-        assert!(!lib.join("9.2.3.partial").exists());
+        assert!(!lib.join("soh").join("9.2.3.partial").exists());
 
         // scan finds it
         let cfg = Config::default();
@@ -450,9 +472,9 @@ mod tests {
         let (_server, url) = setup_server_with_asset(b"archive-body").await;
         let client = github::Client::with_base(cache, _server.uri()).unwrap();
         let release = fixture_release(&url);
-        let plat = FakePlatform::new();
-        plat.fail.store(true, Ordering::SeqCst);
-        let game = FakeGame;
+        let plat = FakePlatform;
+        let game = FakeGame::new();
+        game.fail_extract.store(true, Ordering::SeqCst);
 
         let res = install(
             &client,
@@ -469,8 +491,8 @@ mod tests {
         .await;
         assert!(res.is_err());
 
-        assert!(!lib.join("9.2.3").exists());
-        assert!(!lib.join("9.2.3.partial").exists());
+        assert!(!lib.join("soh").join("9.2.3").exists());
+        assert!(!lib.join("soh").join("9.2.3.partial").exists());
     }
 
     #[tokio::test]
@@ -484,8 +506,8 @@ mod tests {
         let (_server, url) = setup_server_with_asset(b"archive-body").await;
         let client = github::Client::with_base(cache, _server.uri()).unwrap();
         let release = fixture_release(&url);
-        let plat = FakePlatform::new();
-        let game = FakeGame;
+        let plat = FakePlatform;
+        let game = FakeGame::new();
 
         let (installed, override_out) = install(
             &client,

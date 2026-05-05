@@ -12,8 +12,10 @@ use crate::games::Game;
 use crate::platform::Platform;
 use crate::roms::cached_assets::{self, CachedAssetStatus};
 
-/// Reconcile slot symlinks for a single install. Touches only the slot-declared
-/// symlink filenames inside `install_dir`.
+/// Reconcile slot symlinks for a single install. The symlink lives in the
+/// game's `data_dir` (which for SoH is the install dir, but for 2Ship is a
+/// user-global app-support path) — the same directory the game scans for
+/// ROMs and writes its baked archive to.
 pub fn reconcile(
     install_dir: &Path,
     game: &dyn Game,
@@ -22,6 +24,8 @@ pub fn reconcile(
     library_root: &Path,
 ) -> io::Result<()> {
     let presence = cached_assets::scan_cached_assets(game, install_dir, platform);
+    let data_dir = game.data_dir(install_dir, platform);
+    std::fs::create_dir_all(&data_dir)?;
 
     for slot in game.slots() {
         let cached = presence
@@ -33,7 +37,7 @@ pub fn reconcile(
             continue;
         }
 
-        let symlink_path = install_dir.join(slot.symlink_filename);
+        let symlink_path = data_dir.join(slot.symlink_filename);
         match config.assignment_for(game.slug(), slot.id) {
             Some(filename) => {
                 let target = library_root.join(filename);
@@ -97,9 +101,6 @@ mod tests {
         }
         fn asset_keyword(&self) -> &'static str {
             "Linux"
-        }
-        fn extract(&self, _: &Path, _: &Path) -> anyhow::Result<()> {
-            Ok(())
         }
     }
 
@@ -256,6 +257,9 @@ mod tests {
         }
         fn launch_command(&self, _: &Path, _: &dyn Platform) -> Command {
             Command::new("/bin/true")
+        }
+        fn extract(&self, _: &Path, _: &Path, _: &dyn Platform) -> anyhow::Result<()> {
+            Ok(())
         }
     }
 

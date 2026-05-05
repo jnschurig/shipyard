@@ -248,7 +248,10 @@ impl App {
         };
 
         let client_for_fetch = client;
-        let repo = app.game.repo_slug().to_string();
+        let repo = game_for_slug(&app.selected_game_slug)
+            .unwrap_or(app.game)
+            .repo_slug()
+            .to_string();
         let releases_task = Task::perform(
             async move {
                 client_for_fetch
@@ -283,9 +286,21 @@ impl App {
                 Task::none()
             }
             Message::GameSelected(slug) => {
+                if slug == self.selected_game_slug {
+                    return Task::none();
+                }
                 self.selected_game_slug = slug;
                 self.selected_tag = None;
-                Task::none()
+                self.releases.clear();
+                let Some(game) = game_for_slug(&self.selected_game_slug) else {
+                    return Task::none();
+                };
+                let client = self.client.clone();
+                let repo = game.repo_slug().to_string();
+                Task::perform(
+                    async move { client.list_releases(&repo).await.map_err(|e| e.to_string()) },
+                    Message::ReleasesLoaded,
+                )
             }
             Message::VersionSelected(tag) => {
                 self.selected_tag = Some(tag);
@@ -293,8 +308,17 @@ impl App {
             }
             Message::PrimaryActionClicked => {
                 self.gear_menu_open = false;
-                let Some(tag) = self.selected_tag.clone() else {
-                    return Task::none();
+                // Mirror library_view's fallback: if no tag is explicitly
+                // selected, act on the first version in the displayed list.
+                let tag = match self.selected_tag.clone() {
+                    Some(t) => t,
+                    None => {
+                        let Some(first) = self.versions_for_selected_game().into_iter().next()
+                        else {
+                            return Task::none();
+                        };
+                        first.tag
+                    }
                 };
                 let installed = self
                     .installed
@@ -431,11 +455,13 @@ impl App {
                 else {
                     return Task::none();
                 };
+                let Some(game) = game_for_slug(&self.selected_game_slug) else {
+                    return Task::none();
+                };
                 self.install_states
                     .insert(tag.clone(), InstallState::Installing);
 
                 let client = self.client.clone();
-                let game = self.game;
                 let platform = self.platform;
                 let library_root = self.library_root.clone();
                 let download_dir = self.download_dir.clone();
@@ -743,13 +769,20 @@ impl App {
     }
 
     fn library_view(&self) -> Element<'_, Message> {
-        let games: Vec<GameChoice> = games_mod::registry()
+        let mut games_with_sort: Vec<(&'static str, GameChoice)> = games_mod::registry()
             .iter()
-            .map(|g| GameChoice {
-                slug: g.slug().to_string(),
-                display_name: g.display_name().to_string(),
+            .map(|g| {
+                (
+                    g.sort_name(),
+                    GameChoice {
+                        slug: g.slug().to_string(),
+                        display_name: g.display_name().to_string(),
+                    },
+                )
             })
             .collect();
+        games_with_sort.sort_by_key(|(s, _)| s.to_ascii_lowercase());
+        let games: Vec<GameChoice> = games_with_sort.into_iter().map(|(_, c)| c).collect();
         let selected_game = games
             .iter()
             .find(|g| g.slug == self.selected_game_slug)
@@ -1202,20 +1235,6 @@ mod tests {
         fn asset_keyword(&self) -> &'static str {
             "Mac"
         }
-        fn extract(&self, _archive: &Path, dest: &Path) -> anyhow::Result<()> {
-            std::fs::create_dir_all(dest)?;
-            let script = dest.join("mockgame.sh");
-            std::fs::write(
-                &script,
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args.txt\"\n",
-            )?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-            }
-            Ok(())
-        }
     }
 
     struct FakeGame;
@@ -1252,6 +1271,20 @@ mod tests {
         }
         fn launch_command(&self, install_dir: &Path, _: &dyn Platform) -> Command {
             Command::new(install_dir.join("mockgame.sh"))
+        }
+        fn extract(&self, _archive: &Path, dest: &Path, _: &dyn Platform) -> anyhow::Result<()> {
+            std::fs::create_dir_all(dest)?;
+            let script = dest.join("mockgame.sh");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args.txt\"\n",
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
         }
     }
 
@@ -1373,7 +1406,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let args_file = library_root.join("1.0.0").join("args.txt");
+        let args_file = library_root.join("fake").join("1.0.0").join("args.txt");
         let args = std::fs::read_to_string(&args_file).expect("mock game should have run");
         // Launcher passes no extra args beyond what the binary itself sees.
         assert!(
@@ -1489,7 +1522,7 @@ mod tests {
         .map_err(|e| e.to_string());
         let _ = app.update(Message::InstallFinished("1.0.0".into(), installed));
 
-        let install_dir = library_root.join("1.0.0");
+        let install_dir = library_root.join("fake").join("1.0.0");
         let _ = app.update(Message::LaunchClicked("1.0.0".into()));
         for _ in 0..100 {
             if !app.running_contains("1.0.0") {

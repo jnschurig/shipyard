@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::Result;
+
 use crate::github::ReleaseAsset;
 use crate::platform::Platform;
 
 pub mod soh;
+pub mod twoship;
 
 /// Game-declared ROM slot. Each game owns its own slot id namespace; ids are
 /// only meaningful within a `(game_slug, slot_id)` pair.
@@ -29,6 +32,12 @@ pub trait Game: Send + Sync {
     fn slug(&self) -> &'static str;
     fn repo_slug(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
+
+    /// Sort key for the game picker. Defaults to `display_name`. Games whose
+    /// display name doesn't sort sensibly (e.g. leading digit) override this.
+    fn sort_name(&self) -> &'static str {
+        self.display_name()
+    }
 
     /// User-facing label for the underlying game whose ROMs the slots accept.
     /// Distinct from `display_name` (which names the launcher/port). For
@@ -58,8 +67,14 @@ pub trait Game: Send + Sync {
     ) -> Option<&'a ReleaseAsset>;
 
     fn launch_command(&self, install_dir: &Path, platform: &dyn Platform) -> Command;
+
+    /// Extract a downloaded release archive into `dest`. Each port packages
+    /// releases differently (SoH wraps a DMG inside a zip; 2Ship ships a
+    /// `.app` or nested AppImage directly), so this lives on `Game` rather
+    /// than `Platform`.
+    fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()>;
 }
 
 pub fn registry() -> &'static [&'static dyn Game] {
-    &[&soh::Soh]
+    &[&soh::Soh, &twoship::TwoShip]
 }

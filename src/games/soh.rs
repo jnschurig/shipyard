@@ -1,8 +1,12 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::{Context, Result, anyhow};
+
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
+use crate::library::extract::{find_first_with_ext, unzip};
 use crate::platform::Platform;
 
 pub const SLOT_OOT: &str = "oot";
@@ -84,6 +88,54 @@ impl Game for Soh {
         cmd.current_dir(install_dir);
         cmd
     }
+
+    fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
+        match platform.asset_keyword() {
+            "Mac" => extract_mac(archive, dest),
+            "Linux" => extract_linux(archive, dest),
+            other => Err(anyhow!("SoH: unsupported platform keyword {other}")),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
+    use crate::library::extract::{copy_dir_recursive, mount_dmg};
+
+    let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
+    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
+
+    let dmg = find_first_with_ext(scratch.path(), "dmg")?;
+    let mount = mount_dmg(&dmg)?;
+
+    let app = find_first_with_ext(&mount.mount_point, "app")?;
+    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
+    let target = dest.join(app.file_name().unwrap());
+    copy_dir_recursive(&app, &target)
+        .with_context(|| format!("copy {} -> {}", app.display(), target.display()))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn extract_mac(_archive: &Path, _dest: &Path) -> Result<()> {
+    Err(anyhow!("SoH macOS extraction is only available on macOS"))
+}
+
+fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
+    let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
+    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
+
+    let appimage = find_first_with_ext(scratch.path(), "appimage")?;
+    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
+    let target = dest.join(appimage.file_name().unwrap());
+    fs::copy(&appimage, &target).with_context(|| format!("copy to {}", target.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -151,6 +203,39 @@ mod tests {
                 "cached asset slot_id {:?} is not declared in slots()",
                 ca.slot_id
             );
+        }
+    }
+
+    #[test]
+    fn extract_appimage_zip_on_unix() {
+        use std::fs;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let archive = dir.path().join("release.zip");
+        let f = fs::File::create(&archive).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        w.start_file("readme.txt", opts).unwrap();
+        w.write_all(b"hi").unwrap();
+        w.start_file("soh.appimage", opts).unwrap();
+        w.write_all(b"\x7fELF-fake-appimage-body").unwrap();
+        w.finish().unwrap();
+
+        let dest = dir.path().join("install");
+        Soh.extract(&archive, &dest, &Linux).unwrap();
+
+        let target = dest.join("soh.appimage");
+        assert!(target.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"\x7fELF-fake-appimage-body");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755);
         }
     }
 }
