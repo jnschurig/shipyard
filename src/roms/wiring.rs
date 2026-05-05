@@ -10,37 +10,31 @@ use std::path::Path;
 use crate::config::Config;
 use crate::games::Game;
 use crate::platform::Platform;
-use crate::roms::cached_assets::{self, CachedAssetStatus};
 
-/// Reconcile slot symlinks for a single install. The symlink always lives in
-/// the install dir — every supported game scans its install dir for ROMs on
-/// first launch. `data_dir` is used only for *cached-asset* presence checks
-/// (e.g. 2Ship writes `mm.o2r` to a user-global app-support path), which can
-/// differ from the install dir.
+/// Reconcile slot ROM placement for a single install. The ROM is copied into
+/// the install dir — this is where each supported game's extractor scans for
+/// ROMs (CWD- or bundle-relative path that resolves to the install dir at
+/// runtime).
+///
+/// Earlier iterations skipped the copy when a cached `.o2r` was already
+/// present, but that was unsafe for games like 2Ship whose cached archive
+/// lives in a user-global path: a stale archive from a previous install can
+/// trigger a "regenerate ROM" prompt at launch, and the ROM needs to be
+/// findable in the install dir at that moment. Copying unconditionally costs
+/// ~32MB per launch, which is cheap compared to the failure mode.
 pub fn reconcile(
     install_dir: &Path,
     game: &dyn Game,
-    platform: &dyn Platform,
+    _platform: &dyn Platform,
     config: &Config,
     library_root: &Path,
 ) -> io::Result<()> {
-    let presence = cached_assets::scan_cached_assets(game, install_dir, platform);
-
     for slot in game.slots() {
-        let cached = presence
-            .iter()
-            .find(|p| p.slot_id == slot.id)
-            .map(|p| &p.status);
-        if matches!(cached, Some(CachedAssetStatus::Present { .. })) {
-            // Game already has its baked archive; ROM not needed.
-            continue;
-        }
-
         let symlink_path = install_dir.join(slot.symlink_filename);
         match config.assignment_for(game.slug(), slot.id) {
             Some(filename) => {
                 let target = library_root.join(filename);
-                place_symlink(&symlink_path, &target)?;
+                place_copy(&symlink_path, &target)?;
             }
             None => match std::fs::remove_file(&symlink_path) {
                 Ok(()) => {}
@@ -52,26 +46,31 @@ pub fn reconcile(
     Ok(())
 }
 
-#[cfg(unix)]
-fn place_symlink(link: &Path, target: &Path) -> io::Result<()> {
-    use std::os::unix::fs::symlink;
-    // Symlink-then-rename for atomic replacement. The temp suffix is fixed —
-    // a second concurrent reconcile against the same install dir would race,
-    // but the launcher is the only caller and is invoked one-at-a-time per
-    // install.
-    let tmp = link.with_extension("z64.tmp");
+/// Copy `target` to `dest` atomically (copy → rename), unless `dest` already
+/// matches `target` by size (cheap proxy for "same file"). ROMs are large
+/// enough that an unconditional copy on every launch is wasteful, but content
+/// hashing is overkill — size is a strong-enough signal because the user's
+/// only way to change the assigned ROM is via the picker, which assigns a
+/// different filename.
+///
+/// Symlinks were considered but rejected: some HarbourMasters ports (notably
+/// 2Ship) don't follow them reliably during first-run ROM extraction.
+fn place_copy(dest: &Path, target: &Path) -> io::Result<()> {
+    let target_meta = std::fs::metadata(target)?;
+    if let Ok(dest_meta) = std::fs::metadata(dest)
+        && dest_meta.is_file()
+        && dest_meta.len() == target_meta.len()
+    {
+        return Ok(());
+    }
+
+    let tmp = dest.with_extension("z64.tmp");
     let _ = std::fs::remove_file(&tmp);
-    symlink(target, &tmp)?;
-    if let Err(e) = std::fs::rename(&tmp, link) {
+    std::fs::copy(target, &tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn place_symlink(_link: &Path, _target: &Path) -> io::Result<()> {
-    tracing::warn!("symlink reconciliation is not implemented on this platform");
     Ok(())
 }
 
@@ -82,7 +81,6 @@ mod tests {
     use crate::games::{CachedAssetSpec, Game, SlotSpec};
     use crate::github::ReleaseAsset;
     use std::fs;
-    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use tempfile::tempdir;
@@ -115,31 +113,33 @@ mod tests {
     }
 
     #[test]
-    fn missing_cached_and_assigned_creates_symlink() {
+    fn missing_cached_and_assigned_creates_copy() {
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
         let lib = dir.path().join("lib");
-        let target = make_rom(&lib, "oot.z64");
+        let _target = make_rom(&lib, "oot.z64");
 
         let mut config = Config::default();
         config.set_assignment("soh", SLOT_OOT, Some("oot.z64".into()));
 
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
 
-        let link = install.join("oot.z64");
-        assert!(link.is_symlink());
-        assert_eq!(fs::read_link(&link).unwrap(), target);
+        let copy = install.join("oot.z64");
+        assert!(copy.is_file());
+        assert!(!copy.is_symlink());
+        assert_eq!(fs::read(&copy).unwrap(), b"rom-bytes");
         // oot-mq is unassigned → no file created
         assert!(!install.join("oot-mq.z64").exists());
     }
 
     #[test]
-    fn cached_present_is_a_noop_even_when_assigned() {
+    fn copies_rom_even_when_cached_archive_present() {
+        // Reconcile no longer skips when the cached archive exists — see the
+        // doc comment on `reconcile` for why.
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
-        // Pretend SoH already generated oot.o2r in the install dir.
         write(&install.join("oot.o2r"), b"baked");
         let lib = dir.path().join("lib");
         make_rom(&lib, "oot.z64");
@@ -149,17 +149,18 @@ mod tests {
 
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
 
-        assert!(!install.join("oot.z64").exists(), "no symlink expected");
+        assert!(install.join("oot.z64").is_file());
     }
 
     #[test]
-    fn unassigned_removes_stale_symlink() {
+    fn unassigned_removes_stale_copy() {
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
         let lib = dir.path().join("lib");
-        let target = make_rom(&lib, "old.z64");
-        symlink(&target, install.join("oot.z64")).unwrap();
+        make_rom(&lib, "old.z64");
+        // Stale ROM file (could be an old copy or symlink from a previous run).
+        write(&install.join("oot.z64"), b"stale");
 
         let config = Config::default();
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
@@ -179,11 +180,11 @@ mod tests {
         let mut config = Config::default();
         config.set_assignment("soh", SLOT_OOT, Some("a.z64".into()));
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
-        assert_eq!(fs::read_link(install.join("oot.z64")).unwrap(), a);
+        assert_eq!(fs::read(install.join("oot.z64")).unwrap(), fs::read(&a).unwrap());
 
         config.set_assignment("soh", SLOT_OOT, Some("b.z64".into()));
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
-        assert_eq!(fs::read_link(install.join("oot.z64")).unwrap(), b);
+        assert_eq!(fs::read(install.join("oot.z64")).unwrap(), fs::read(&b).unwrap());
     }
 
     #[test]
@@ -199,7 +200,7 @@ mod tests {
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
         reconcile(&install, &Soh, &FakePlatform, &config, &lib).unwrap();
-        assert!(install.join("oot.z64").is_symlink());
+        assert!(install.join("oot.z64").is_file());
     }
 
     #[test]
@@ -281,6 +282,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(install.join("primary.rom").is_symlink());
+        assert!(install.join("primary.rom").is_file());
     }
 }
