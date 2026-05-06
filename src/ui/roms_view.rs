@@ -70,9 +70,7 @@ impl App {
         for game in games_mod::registry() {
             for slot in game.slots() {
                 if !first {
-                    table = table.push(
-                        container(horizontal_rule(1)).padding([0, 8]),
-                    );
+                    table = table.push(container(horizontal_rule(1)).padding([0, 8]));
                 }
                 first = false;
 
@@ -98,9 +96,7 @@ impl App {
                 })
                 .width(Length::Fixed(360.0));
 
-                let label = text(slot.display_name)
-                    .size(13)
-                    .width(Length::Fixed(240.0));
+                let label = text(slot.display_name).size(13).width(Length::Fixed(240.0));
                 let row_el = row![label, text("").width(Length::Fill), picker]
                     .spacing(12)
                     .align_y(iced::Alignment::Center);

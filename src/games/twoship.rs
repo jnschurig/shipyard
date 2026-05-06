@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(TwoShip.data_dir(install, &MacOs), install);
     }
 
-#[test]
+    #[test]
     fn extract_linux_handles_nested_appimage() {
         let dir = tempdir().unwrap();
         let archive = dir.path().join("release.zip");

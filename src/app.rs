@@ -44,8 +44,14 @@ pub enum Banner {
 #[derive(Debug, Clone)]
 pub enum Message {
     TabSelected(Tab),
-    ReleasesLoaded(Result<(Vec<Release>, RateLimitStatus), String>),
-    InstallClicked(String),
+    ReleasesLoaded {
+        game_slug: String,
+        result: Result<(Vec<Release>, RateLimitStatus), String>,
+    },
+    InstallClicked {
+        game_slug: String,
+        tag: String,
+    },
     InstallProgress(String, Option<u8>),
     InstallFinished(String, Result<InstalledVersion, String>),
     UninstallClicked(String),
@@ -68,14 +74,16 @@ pub enum Message {
         filename: Option<String>,
     },
 
-    GameSelected(String),
-    VersionSelected(String),
-    PrimaryActionClicked,
-    ToggleGearMenu,
+    VersionSelected {
+        game_slug: String,
+        tag: String,
+    },
+    PrimaryActionClicked(String /* game_slug */),
+    ToggleGearMenu(String /* game_slug */),
     DismissPopovers,
-    ManualRefreshClicked,
-    UninstallSelectedClicked,
-    ClearCacheSelectedClicked,
+    ManualRefreshClicked(String /* game_slug */),
+    UninstallSelectedClicked(String /* game_slug */),
+    ClearCacheSelectedClicked(String /* game_slug */),
     ToggleImportedRomsExpander,
     VersionsToShowInputChanged(String),
     VersionsToShowSubmit,
@@ -125,7 +133,7 @@ pub struct App {
     client: Arc<github::Client>,
 
     pub(crate) installed: Vec<InstalledVersion>,
-    pub(crate) releases: Vec<Release>,
+    pub(crate) releases_by_game: HashMap<String, Vec<Release>>,
     pub(crate) install_states: HashMap<String, InstallState>,
     pub(crate) install_progress: HashMap<String, Option<u8>>,
     running: HashMap<String, LaunchHandle>,
@@ -141,8 +149,8 @@ pub struct App {
     pub(crate) roms: Vec<RomEntry>,
 
     pub(crate) selected_game_slug: String,
-    pub(crate) selected_tag: Option<String>,
-    pub(crate) gear_menu_open: bool,
+    pub(crate) selected_tags: HashMap<String, String>,
+    pub(crate) gear_menu_open_for_game: Option<String>,
     pub(crate) imported_roms_expanded: bool,
 }
 
@@ -214,7 +222,10 @@ impl App {
                     .map(|g| g.slug().to_string())
                     .unwrap_or_default()
             });
-        let selected_tag = config.last_launched.as_ref().map(|l| l.tag.clone());
+        let mut selected_tags: HashMap<String, String> = HashMap::new();
+        if let Some(last) = config.last_launched.as_ref() {
+            selected_tags.insert(last.game_slug.clone(), last.tag.clone());
+        }
         let versions_to_show_input = config.versions_to_show.to_string();
 
         let app = Self {
@@ -226,7 +237,7 @@ impl App {
             platform,
             client: client.clone(),
             installed,
-            releases: Vec::new(),
+            releases_by_game: HashMap::new(),
             install_states,
             install_progress: HashMap::new(),
             running: HashMap::new(),
@@ -239,27 +250,28 @@ impl App {
             rom_library_root,
             roms,
             selected_game_slug,
-            selected_tag,
-            gear_menu_open: false,
+            selected_tags,
+            gear_menu_open_for_game: None,
             imported_roms_expanded: false,
         };
 
-        let client_for_fetch = client;
-        let repo = game_for_slug(&app.selected_game_slug)
-            .unwrap_or(app.game)
-            .repo_slug()
-            .to_string();
-        let releases_task = Task::perform(
-            async move {
-                client_for_fetch
-                    .list_releases(&repo)
-                    .await
-                    .map_err(|e| e.to_string())
-            },
-            Message::ReleasesLoaded,
-        );
+        let release_tasks: Vec<Task<Message>> = games_mod::registry()
+            .iter()
+            .map(|g| {
+                let client = client.clone();
+                let repo = g.repo_slug().to_string();
+                let slug = g.slug().to_string();
+                Task::perform(
+                    async move { client.list_releases(&repo).await.map_err(|e| e.to_string()) },
+                    move |result| Message::ReleasesLoaded {
+                        game_slug: slug.clone(),
+                        result,
+                    },
+                )
+            })
+            .collect();
 
-        (app, releases_task)
+        (app, Task::batch(release_tasks))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -267,68 +279,58 @@ impl App {
             Message::TabSelected(t) => {
                 self.tab = t;
                 self.modal = Modal::Closed;
-                self.gear_menu_open = false;
+                self.gear_menu_open_for_game = None;
                 Task::none()
             }
             Message::DismissPopovers => {
-                self.gear_menu_open = false;
+                self.gear_menu_open_for_game = None;
                 Task::none()
             }
-            Message::ToggleGearMenu => {
-                self.gear_menu_open = !self.gear_menu_open;
+            Message::ToggleGearMenu(slug) => {
+                if self.gear_menu_open_for_game.as_deref() == Some(slug.as_str()) {
+                    self.gear_menu_open_for_game = None;
+                } else {
+                    self.gear_menu_open_for_game = Some(slug);
+                }
                 Task::none()
             }
             Message::ToggleImportedRomsExpander => {
                 self.imported_roms_expanded = !self.imported_roms_expanded;
                 Task::none()
             }
-            Message::GameSelected(slug) => {
-                if slug == self.selected_game_slug {
-                    return Task::none();
-                }
-                self.selected_game_slug = slug;
-                self.selected_tag = None;
-                self.releases.clear();
-                let Some(game) = game_for_slug(&self.selected_game_slug) else {
-                    return Task::none();
-                };
-                let client = self.client.clone();
-                let repo = game.repo_slug().to_string();
-                Task::perform(
-                    async move { client.list_releases(&repo).await.map_err(|e| e.to_string()) },
-                    Message::ReleasesLoaded,
-                )
-            }
-            Message::VersionSelected(tag) => {
-                self.selected_tag = Some(tag);
+            Message::VersionSelected { game_slug, tag } => {
+                self.selected_tags.insert(game_slug.clone(), tag);
+                self.selected_game_slug = game_slug;
                 Task::none()
             }
-            Message::PrimaryActionClicked => {
-                self.gear_menu_open = false;
-                // Mirror library_view's fallback: if no tag is explicitly
-                // selected, act on the first version in the displayed list.
-                let tag = match self.selected_tag.clone() {
+            Message::PrimaryActionClicked(slug) => {
+                self.gear_menu_open_for_game = None;
+                let tag = match self.selected_tags.get(&slug).cloned() {
                     Some(t) => t,
                     None => {
-                        let Some(first) = self.versions_for_selected_game().into_iter().next()
-                        else {
+                        let Some(first) = self.versions_for_game(&slug).into_iter().next() else {
                             return Task::none();
                         };
                         first.tag
                     }
                 };
+                self.selected_game_slug = slug.clone();
+                self.selected_tags.insert(slug.clone(), tag.clone());
                 let installed = self
                     .installed
                     .iter()
-                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug);
+                    .any(|v| v.tag == tag && v.game_slug == slug);
                 if installed {
                     self.update(Message::LaunchClicked(tag))
                 } else {
-                    self.update(Message::InstallClicked(tag))
+                    self.update(Message::InstallClicked {
+                        game_slug: slug,
+                        tag,
+                    })
                 }
             }
-            Message::ManualRefreshClicked => {
-                self.gear_menu_open = false;
+            Message::ManualRefreshClicked(slug) => {
+                self.gear_menu_open_for_game = None;
                 if let (Some(remaining), Some(reset_unix)) =
                     (self.rate_limit.remaining, self.rate_limit.reset_at)
                     && remaining == 0
@@ -340,34 +342,38 @@ impl App {
                     )));
                     return Task::none();
                 }
-                let Some(game) = game_for_slug(&self.selected_game_slug) else {
+                let Some(game) = game_for_slug(&slug) else {
                     return Task::none();
                 };
                 let client = self.client.clone();
                 let repo = game.repo_slug().to_string();
+                let slug_for_msg = slug.clone();
                 Task::perform(
                     async move { client.list_releases(&repo).await.map_err(|e| e.to_string()) },
-                    Message::ReleasesLoaded,
+                    move |result| Message::ReleasesLoaded {
+                        game_slug: slug_for_msg.clone(),
+                        result,
+                    },
                 )
             }
-            Message::UninstallSelectedClicked => {
-                self.gear_menu_open = false;
-                let Some(tag) = self.selected_tag.clone() else {
+            Message::UninstallSelectedClicked(slug) => {
+                self.gear_menu_open_for_game = None;
+                let Some(tag) = self.effective_tag_for(&slug) else {
                     return Task::none();
                 };
                 if !self
                     .installed
                     .iter()
-                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug)
+                    .any(|v| v.tag == tag && v.game_slug == slug)
                 {
                     return Task::none();
                 }
                 self.modal = Modal::UninstallConfirm { tag };
                 Task::none()
             }
-            Message::ClearCacheSelectedClicked => {
-                self.gear_menu_open = false;
-                let Some(tag) = self.selected_tag.clone() else {
+            Message::ClearCacheSelectedClicked(slug) => {
+                self.gear_menu_open_for_game = None;
+                let Some(tag) = self.effective_tag_for(&slug) else {
                     return Task::none();
                 };
                 self.update(Message::ClearCachedAssetsClicked(tag))
@@ -416,18 +422,24 @@ impl App {
                 self.modal = Modal::Closed;
                 Task::none()
             }
-            Message::ReleasesLoaded(Ok((releases, rl))) => {
+            Message::ReleasesLoaded {
+                game_slug,
+                result: Ok((releases, rl)),
+            } => {
                 for r in &releases {
                     self.install_states
                         .entry(r.tag_name.clone())
                         .or_insert(InstallState::Idle);
                 }
-                self.releases = releases;
+                self.releases_by_game.insert(game_slug, releases);
                 self.rate_limit = rl;
                 self.persist_rate_limit_snapshot(rl);
                 Task::none()
             }
-            Message::ReleasesLoaded(Err(e)) => {
+            Message::ReleasesLoaded {
+                game_slug: _,
+                result: Err(e),
+            } => {
                 if e.contains("rate limited") {
                     self.banners.push(Banner::RateLimited(e));
                 } else {
@@ -435,18 +447,29 @@ impl App {
                 }
                 Task::none()
             }
-            Message::InstallClicked(tag) => {
+            Message::InstallClicked { game_slug, tag } => {
                 if matches!(
                     self.install_states.get(&tag),
                     Some(InstallState::Installing) | Some(InstallState::Installed)
                 ) {
                     return Task::none();
                 }
-                let Some(release) = self.releases.iter().find(|r| r.tag_name == tag).cloned()
+                let Some(release) = self
+                    .releases_for(&game_slug)
+                    .iter()
+                    .find(|r| r.tag_name == tag)
+                    .cloned()
                 else {
                     return Task::none();
                 };
-                let Some(game) = game_for_slug(&self.selected_game_slug) else {
+                let game = game_for_slug(&game_slug).or_else(|| {
+                    if self.game.slug() == game_slug {
+                        Some(self.game)
+                    } else {
+                        None
+                    }
+                });
+                let Some(game) = game else {
                     return Task::none();
                 };
                 self.install_states
@@ -710,6 +733,31 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    pub(crate) fn releases_for(&self, slug: &str) -> &[Release] {
+        self.releases_by_game
+            .get(slug)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn selected_tag_for(&self, slug: &str) -> Option<&str> {
+        self.selected_tags.get(slug).map(|s| s.as_str())
+    }
+
+    /// Tag the row currently acts on: explicit user selection if any,
+    /// otherwise the first entry in the displayed version list.
+    pub(crate) fn effective_tag_for(&self, slug: &str) -> Option<String> {
+        if let Some(t) = self.selected_tags.get(slug) {
+            return Some(t.clone());
+        }
+        self.versions_for_game(slug).into_iter().next().map(|v| v.tag)
+    }
+
+    pub(crate) fn install_state_for_game(&self, slug: &str) -> Option<InstallState> {
+        let tag = self.effective_tag_for(slug)?;
+        self.install_states.get(&tag).cloned()
     }
 
     fn refresh_rom_list(&mut self) {
@@ -999,19 +1047,25 @@ mod tests {
             .list_releases("fake/repo")
             .await
             .map_err(|e| e.to_string());
-        let _ = app.update(Message::ReleasesLoaded(fetched));
-        assert_eq!(app.releases.len(), 1);
+        let _ = app.update(Message::ReleasesLoaded {
+            game_slug: "fake".into(),
+            result: fetched,
+        });
+        assert_eq!(app.releases_for("fake").len(), 1);
         assert!(matches!(
             app.install_state("1.0.0"),
             Some(InstallState::Idle)
         ));
 
-        let _task = app.update(Message::InstallClicked("1.0.0".into()));
+        let _task = app.update(Message::InstallClicked {
+            game_slug: "fake".into(),
+            tag: "1.0.0".into(),
+        });
         assert!(matches!(
             app.install_state("1.0.0"),
             Some(InstallState::Installing)
         ));
-        let release = app.releases[0].clone();
+        let release = app.releases_for("fake")[0].clone();
         let installed = library::install(
             &client,
             InstallRequest {
@@ -1138,8 +1192,11 @@ mod tests {
             .list_releases("fake/repo")
             .await
             .map_err(|e| e.to_string());
-        let _ = app.update(Message::ReleasesLoaded(fetched));
-        let release = app.releases[0].clone();
+        let _ = app.update(Message::ReleasesLoaded {
+            game_slug: "fake".into(),
+            result: fetched,
+        });
+        let release = app.releases_for("fake")[0].clone();
         let installed = library::install(
             &client,
             InstallRequest {
@@ -1221,10 +1278,10 @@ mod tests {
         app.modal = Modal::DeleteRomConfirm {
             filename: "rom.z64".into(),
         };
-        app.gear_menu_open = true;
+        app.gear_menu_open_for_game = Some("fake".into());
         let _ = app.update(Message::TabSelected(Tab::Roms));
         assert!(matches!(app.modal, Modal::Closed));
-        assert!(!app.gear_menu_open);
+        assert!(app.gear_menu_open_for_game.is_none());
     }
 
     #[tokio::test]
@@ -1255,7 +1312,7 @@ mod tests {
         };
         let app = make_app(&dir, config);
         assert_eq!(app.selected_game_slug, "fake");
-        assert_eq!(app.selected_tag.as_deref(), Some("v9"));
+        assert_eq!(app.selected_tag_for("fake"), Some("v9"));
     }
 
     #[tokio::test]
