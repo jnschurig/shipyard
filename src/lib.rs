@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod app;
 pub mod config;
 pub mod games;
@@ -10,6 +8,3 @@ pub mod paths;
 pub mod platform;
 pub mod roms;
 pub mod ui;
-
-/// Placeholder namespace kept for future shared helpers.
-pub mod app_support {}

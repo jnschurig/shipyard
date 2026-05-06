@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
 use futures_util::StreamExt;
+use reqwest::StatusCode;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH, USER_AGENT,
 };
-use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -287,8 +287,6 @@ fn parse_rate_limit(headers: &reqwest::header::HeaderMap) -> RateLimitStatus {
         reset_at,
     }
 }
-
-fn _response_type_dummy(_: &Response) {}
 
 #[cfg(test)]
 mod tests {

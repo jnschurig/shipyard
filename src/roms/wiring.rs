@@ -1,8 +1,9 @@
 //! Launch-time symlink reconciliation. Right before spawning a game, we
-//! ensure each declared slot's `<install_dir>/<symlink_filename>` points at
-//! the assigned ROM in the library — but only if the game hasn't already
-//! generated its cached `.o2r`/`.otr` for that slot. Once cached, the game
-//! never reads the ROM, so no symlink is needed.
+//! ensure each declared slot's `<install_dir>/<symlink_filename>` is a
+//! symlink pointing at the assigned ROM in the library, or, if the slot is
+//! unassigned, that no such file exists. This runs unconditionally on every
+//! launch — see `reconcile` for why we don't try to skip it when a cached
+//! archive is already present.
 
 use std::io;
 use std::path::Path;
@@ -11,17 +12,17 @@ use crate::config::Config;
 use crate::games::Game;
 use crate::platform::Platform;
 
-/// Reconcile slot ROM placement for a single install. The ROM is copied into
-/// the install dir — this is where each supported game's extractor scans for
-/// ROMs (CWD- or bundle-relative path that resolves to the install dir at
-/// runtime).
+/// Reconcile slot ROM placement for a single install. Each assigned slot's
+/// `<install_dir>/<symlink_filename>` is symlinked to the ROM in the library
+/// — this is where each supported game's extractor scans for ROMs (CWD- or
+/// bundle-relative path that resolves to the install dir at runtime).
 ///
-/// Earlier iterations skipped the copy when a cached `.o2r` was already
-/// present, but that was unsafe for games like 2Ship whose cached archive
-/// lives in a user-global path: a stale archive from a previous install can
-/// trigger a "regenerate ROM" prompt at launch, and the ROM needs to be
-/// findable in the install dir at that moment. Copying unconditionally costs
-/// ~32MB per launch, which is cheap compared to the failure mode.
+/// Earlier iterations skipped this when a cached `.o2r` was already present,
+/// but that was unsafe for games like 2Ship whose cached archive lives in a
+/// user-global path: a stale archive from a previous install can trigger a
+/// "regenerate ROM" prompt at launch, and the ROM needs to be findable in
+/// the install dir at that moment. Symlinking is cheap (a few syscalls)
+/// compared to that failure mode.
 pub fn reconcile(
     install_dir: &Path,
     game: &dyn Game,
@@ -57,7 +58,16 @@ fn place_symlink(dest: &Path, target: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    let tmp = dest.with_extension("z64.tmp");
+    // Sibling temp path with `.tmp` appended to the existing filename, so we
+    // don't assume any particular extension on `dest`.
+    let tmp = match dest.file_name() {
+        Some(name) => {
+            let mut t = name.to_os_string();
+            t.push(".tmp");
+            dest.with_file_name(t)
+        }
+        None => return Err(io::Error::other("symlink dest has no filename")),
+    };
     let _ = std::fs::remove_file(&tmp);
     symlink(target, &tmp)?;
     if let Err(e) = std::fs::rename(&tmp, dest) {

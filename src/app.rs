@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::widget::{
-    button, column, container, opaque, pick_list, row, scrollable, stack, text, text_input,
-};
+use iced::widget::{column, container, opaque, row, stack, text};
 use iced::{Element, Length, Task};
 
 use chrono::TimeZone;
@@ -18,12 +16,7 @@ use crate::library::{self, InstallRequest, InstalledVersion};
 use crate::platform::Platform;
 use crate::roms::cached_assets;
 use crate::roms::library::{self as rom_library, RomEntry};
-
-// Standard button widths per visual family. Visual-only; not covered by tests.
-const TAB_BUTTON_WIDTH: f32 = 90.0;
-const GEAR_MENU_BUTTON_WIDTH: f32 = 210.0;
-const MODAL_BUTTON_WIDTH: f32 = 96.0;
-const PRIMARY_ACTION_BUTTON_WIDTH: f32 = 140.0;
+use crate::ui;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallState {
@@ -116,7 +109,6 @@ pub struct AppDeps {
     pub library_root: PathBuf,
     pub rom_library_root: PathBuf,
     pub download_dir: PathBuf,
-    pub cache_dir: PathBuf,
     pub game: &'static dyn Game,
     pub platform: &'static dyn Platform,
     pub client: Arc<github::Client>,
@@ -124,36 +116,34 @@ pub struct AppDeps {
 }
 
 pub struct App {
-    config: Config,
+    pub(crate) config: Config,
     config_path: PathBuf,
     library_root: PathBuf,
     download_dir: PathBuf,
-    #[allow(dead_code)]
-    cache_dir: PathBuf,
     game: &'static dyn Game,
     platform: &'static dyn Platform,
     client: Arc<github::Client>,
 
-    installed: Vec<InstalledVersion>,
-    releases: Vec<Release>,
-    install_states: HashMap<String, InstallState>,
-    install_progress: HashMap<String, Option<u8>>,
+    pub(crate) installed: Vec<InstalledVersion>,
+    pub(crate) releases: Vec<Release>,
+    pub(crate) install_states: HashMap<String, InstallState>,
+    pub(crate) install_progress: HashMap<String, Option<u8>>,
     running: HashMap<String, LaunchHandle>,
-    rate_limit: RateLimitStatus,
-    banners: Vec<Banner>,
-    tab: Tab,
-    modal: Modal,
+    pub(crate) rate_limit: RateLimitStatus,
+    pub(crate) banners: Vec<Banner>,
+    pub(crate) tab: Tab,
+    pub(crate) modal: Modal,
 
-    library_root_input: String,
-    versions_to_show_input: String,
+    pub(crate) library_root_input: String,
+    pub(crate) versions_to_show_input: String,
 
     rom_library_root: PathBuf,
-    roms: Vec<RomEntry>,
+    pub(crate) roms: Vec<RomEntry>,
 
-    selected_game_slug: String,
-    selected_tag: Option<String>,
-    gear_menu_open: bool,
-    imported_roms_expanded: bool,
+    pub(crate) selected_game_slug: String,
+    pub(crate) selected_tag: Option<String>,
+    pub(crate) gear_menu_open: bool,
+    pub(crate) imported_roms_expanded: bool,
 }
 
 impl App {
@@ -164,7 +154,6 @@ impl App {
             library_root,
             rom_library_root,
             download_dir,
-            cache_dir,
             game,
             platform,
             client,
@@ -233,7 +222,6 @@ impl App {
             config_path,
             library_root,
             download_dir,
-            cache_dir,
             game,
             platform,
             client: client.clone(),
@@ -393,10 +381,7 @@ impl App {
                     Ok(n) if n >= MIN_VERSIONS_TO_SHOW => {
                         if self.config.versions_to_show != n {
                             self.config.versions_to_show = n;
-                            if let Err(e) = self.config.save_to(&self.config_path) {
-                                self.banners
-                                    .push(Banner::Error(format!("save config: {e}")));
-                            } else {
+                            if self.save_config() {
                                 self.banners
                                     .push(Banner::Info(format!("versions to show set to {n}")));
                             }
@@ -413,11 +398,8 @@ impl App {
             }
             Message::DeleteRomConfirm(filename) => {
                 let cleared = self.config.clear_assignments_referencing(&filename);
-                if cleared > 0
-                    && let Err(e) = self.config.save_to(&self.config_path)
-                {
-                    self.banners
-                        .push(Banner::Error(format!("save config: {e}")));
+                if cleared > 0 {
+                    self.save_config();
                 }
                 if let Err(e) = rom_library::delete(&self.rom_library_root, &filename) {
                     self.banners
@@ -611,10 +593,7 @@ impl App {
                         };
                         if self.config.last_launched.as_ref() != Some(&last) {
                             self.config.last_launched = Some(last);
-                            if let Err(e) = self.config.save_to(&self.config_path) {
-                                self.banners
-                                    .push(Banner::Error(format!("save config: {e}")));
-                            }
+                            self.save_config();
                         }
                     }
                     Err(e) => {
@@ -630,10 +609,7 @@ impl App {
             }
             Message::SaveSettings => {
                 self.config.library_root = Some(PathBuf::from(&self.library_root_input));
-                if let Err(e) = self.config.save_to(&self.config_path) {
-                    self.banners
-                        .push(Banner::Error(format!("save config: {e}")));
-                } else {
+                if self.save_config() {
                     self.banners
                         .push(Banner::Info("settings saved".to_string()));
                 }
@@ -730,10 +706,7 @@ impl App {
             } => {
                 self.config
                     .set_assignment(&game_slug, &slot_id, filename.clone());
-                if let Err(e) = self.config.save_to(&self.config_path) {
-                    self.banners
-                        .push(Banner::Error(format!("save config: {e}")));
-                }
+                self.save_config();
                 Task::none()
             }
         }
@@ -741,6 +714,19 @@ impl App {
 
     fn refresh_rom_list(&mut self) {
         self.roms = rom_library::list(&self.rom_library_root).unwrap_or_default();
+    }
+
+    /// Persist `self.config` to disk; on failure push an error banner. Returns
+    /// `true` when the save succeeded so callers can chain an info banner.
+    fn save_config(&mut self) -> bool {
+        match self.config.save_to(&self.config_path) {
+            Ok(()) => true,
+            Err(e) => {
+                self.banners
+                    .push(Banner::Error(format!("save config: {e}")));
+                false
+            }
+        }
     }
 
     /// Update `Config.rate_limit_snapshot` from a freshly-observed
@@ -769,10 +755,10 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let tabs = row![
-            tab_button("Library", self.tab == Tab::Library, Tab::Library),
-            tab_button("Roms", self.tab == Tab::Roms, Tab::Roms),
-            tab_button("Mods", self.tab == Tab::Mods, Tab::Mods),
-            tab_button("Settings", self.tab == Tab::Settings, Tab::Settings),
+            ui::tab_button("Library", self.tab == Tab::Library, Tab::Library),
+            ui::tab_button("Roms", self.tab == Tab::Roms, Tab::Roms),
+            ui::tab_button("Mods", self.tab == Tab::Mods, Tab::Mods),
+            ui::tab_button("Settings", self.tab == Tab::Settings, Tab::Settings),
         ]
         .spacing(8);
 
@@ -835,372 +821,6 @@ impl App {
         }
     }
 
-    fn library_view(&self) -> Element<'_, Message> {
-        let mut games_with_sort: Vec<(&'static str, GameChoice)> = games_mod::registry()
-            .iter()
-            .map(|g| {
-                (
-                    g.sort_name(),
-                    GameChoice {
-                        slug: g.slug().to_string(),
-                        display_name: g.display_name().to_string(),
-                    },
-                )
-            })
-            .collect();
-        games_with_sort.sort_by_key(|(s, _)| s.to_ascii_lowercase());
-        let games: Vec<GameChoice> = games_with_sort.into_iter().map(|(_, c)| c).collect();
-        let selected_game = games
-            .iter()
-            .find(|g| g.slug == self.selected_game_slug)
-            .cloned()
-            .or_else(|| games.first().cloned());
-
-        let versions = self.versions_for_selected_game();
-        let selected_version = self
-            .selected_tag
-            .as_ref()
-            .and_then(|t| versions.iter().find(|v| v.tag == *t).cloned())
-            .or_else(|| versions.first().cloned());
-
-        let game_pick = pick_list(games, selected_game, |g: GameChoice| {
-            Message::GameSelected(g.slug)
-        });
-        let version_pick = pick_list(
-            versions.clone(),
-            selected_version.clone(),
-            |v: VersionChoice| Message::VersionSelected(v.tag),
-        );
-
-        let primary_label: String = match (&selected_version, self.selected_install_state()) {
-            (Some(v), Some(InstallState::Installing)) => {
-                match self.install_progress.get(&v.tag).copied().flatten() {
-                    Some(pct) => format!("Installing… {pct}%"),
-                    None => "Installing…".to_string(),
-                }
-            }
-            (Some(v), _) if v.installed => "Launch".to_string(),
-            (Some(_), _) => "Install".to_string(),
-            (None, _) => "Launch".to_string(),
-        };
-        let mut primary =
-            button(text(primary_label).size(14)).width(Length::Fixed(PRIMARY_ACTION_BUTTON_WIDTH));
-        if matches!(
-            self.selected_install_state(),
-            Some(InstallState::Installing)
-        ) {
-            // disabled while installing
-        } else if selected_version.is_some() {
-            primary = primary.on_press(Message::PrimaryActionClicked);
-        }
-
-        let gear = button(text("⚙").size(16)).on_press(Message::ToggleGearMenu);
-
-        let top_row = row![game_pick, version_pick, primary, gear].spacing(8);
-
-        let mut body: iced::widget::Column<'_, Message> =
-            column![text(self.game_title_label()).size(20), top_row].spacing(12);
-
-        if self.gear_menu_open {
-            body = body.push(self.gear_menu());
-        }
-
-        scrollable(body).height(Length::Fill).into()
-    }
-
-    fn gear_menu(&self) -> Element<'_, Message> {
-        let installed = self.selected_install_state() == Some(InstallState::Installed);
-        let tooltip_text = "Available only for installed versions.";
-
-        let clear_btn = if installed {
-            button(text("Clear Cache"))
-                .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
-                .on_press(Message::ClearCacheSelectedClicked)
-        } else {
-            button(text("Clear Cache")).width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
-        };
-        let uninstall_btn = if installed {
-            button(text("Uninstall"))
-                .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
-                .on_press(Message::UninstallSelectedClicked)
-        } else {
-            button(text("Uninstall")).width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
-        };
-        let refresh_btn = button(text("Check for new versions"))
-            .width(Length::Fixed(GEAR_MENU_BUTTON_WIDTH))
-            .on_press(Message::ManualRefreshClicked);
-
-        let clear_el: Element<_> = if installed {
-            clear_btn.into()
-        } else {
-            iced::widget::tooltip(
-                clear_btn,
-                container(text(tooltip_text).size(12)).padding(6),
-                iced::widget::tooltip::Position::Right,
-            )
-            .into()
-        };
-        let uninstall_el: Element<_> = if installed {
-            uninstall_btn.into()
-        } else {
-            iced::widget::tooltip(
-                uninstall_btn,
-                container(text(tooltip_text).size(12)).padding(6),
-                iced::widget::tooltip::Position::Right,
-            )
-            .into()
-        };
-
-        container(column![clear_el, uninstall_el, refresh_btn].spacing(4))
-            .padding(8)
-            .style(|theme: &iced::Theme| {
-                let palette = theme.extended_palette();
-                container::Style {
-                    background: Some(iced::Background::Color(palette.background.weak.color)),
-                    border: iced::Border {
-                        color: palette.background.strong.color,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            })
-            .into()
-    }
-
-    fn game_title_label(&self) -> String {
-        game_for_slug(&self.selected_game_slug)
-            .map(|g| g.display_name().to_string())
-            .unwrap_or_else(|| "Shipyard".to_string())
-    }
-
-    fn selected_install_state(&self) -> Option<InstallState> {
-        let tag = self.selected_tag.as_ref()?;
-        self.install_states.get(tag).cloned()
-    }
-
-    /// Compute the version list for the Library dropdown: most recent N
-    /// releases plus any installed version older than that window. Sorted with
-    /// the latest first (matches GitHub's own ordering).
-    fn versions_for_selected_game(&self) -> Vec<VersionChoice> {
-        let n = self.config.versions_to_show.max(MIN_VERSIONS_TO_SHOW) as usize;
-        let recent_tags: Vec<&str> = self
-            .releases
-            .iter()
-            .take(n)
-            .map(|r| r.tag_name.as_str())
-            .collect();
-        let mut tags: Vec<String> = recent_tags.iter().map(|s| s.to_string()).collect();
-        for inst in &self.installed {
-            if inst.game_slug == self.selected_game_slug && !tags.iter().any(|t| t == &inst.tag) {
-                tags.push(inst.tag.clone());
-            }
-        }
-        let latest_tag = self.releases.first().map(|r| r.tag_name.clone());
-        tags.into_iter()
-            .map(|tag| {
-                let installed = self
-                    .installed
-                    .iter()
-                    .any(|v| v.tag == tag && v.game_slug == self.selected_game_slug);
-                let latest = latest_tag.as_ref() == Some(&tag);
-                VersionChoice {
-                    tag,
-                    installed,
-                    latest,
-                }
-            })
-            .collect()
-    }
-
-    fn roms_view(&self) -> Element<'_, Message> {
-        let import_btn = button(text("Import Rom")).on_press(Message::ImportRomClicked);
-        let mut body: iced::widget::Column<'_, Message> = column![import_btn].spacing(12);
-
-        let expander_label = if self.imported_roms_expanded {
-            format!("▾ Imported Roms ({})", self.roms.len())
-        } else {
-            format!("▸ Imported Roms ({})", self.roms.len())
-        };
-        body = body.push(
-            button(text(expander_label).size(14)).on_press(Message::ToggleImportedRomsExpander),
-        );
-
-        if self.imported_roms_expanded {
-            if self.roms.is_empty() {
-                body = body.push(text("(none)").size(12));
-            } else {
-                for r in &self.roms {
-                    let filename = r.filename.clone();
-                    body = body.push(
-                        row![
-                            text(r.filename.clone()).width(Length::Fill).size(12),
-                            button(text("✕")).on_press(Message::DeleteRomClicked(filename)),
-                        ]
-                        .spacing(6),
-                    );
-                }
-            }
-        }
-
-        body = body.push(section_header("Slot Assignments"));
-        for game in games_mod::registry() {
-            body = body.push(text(game.rom_group_name()).size(14));
-            for slot in game.slots() {
-                let current = self
-                    .config
-                    .assignment_for(game.slug(), slot.id)
-                    .map(|s| s.to_string());
-                let options: Vec<SlotChoice> = std::iter::once(SlotChoice::unassigned())
-                    .chain(self.roms.iter().map(|r| SlotChoice::filename(&r.filename)))
-                    .collect();
-                let selected = match &current {
-                    Some(name) => SlotChoice::filename(name),
-                    None => SlotChoice::unassigned(),
-                };
-                let game_slug = game.slug().to_string();
-                let slot_id = slot.id.to_string();
-                let picker = pick_list(options, Some(selected), move |c: SlotChoice| {
-                    Message::AssignSlotChanged {
-                        game_slug: game_slug.clone(),
-                        slot_id: slot_id.clone(),
-                        filename: c.into_filename(),
-                    }
-                });
-                body = body.push(
-                    row![text(slot.display_name).width(Length::Fill).size(12), picker].spacing(6),
-                );
-            }
-        }
-
-        scrollable(body).height(Length::Fill).into()
-    }
-
-    fn mods_view(&self) -> Element<'_, Message> {
-        container(text("Mod management is coming soon™.").size(16))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
-    fn settings_view(&self) -> Element<'_, Message> {
-        let rate = match (
-            self.rate_limit.remaining,
-            self.rate_limit.limit,
-            self.rate_limit.reset_at,
-        ) {
-            (Some(r), Some(lim), Some(reset)) => format!(
-                "GitHub rate limit: {r}/{lim}, resets at {}",
-                reset.with_timezone(&chrono::Local).format("%H:%M:%S")
-            ),
-            (Some(r), Some(lim), None) => format!("GitHub rate limit: {r}/{lim}"),
-            (Some(r), None, _) => format!("GitHub rate limit: {r} remaining"),
-            _ => "GitHub rate limit: unknown".to_string(),
-        };
-        let token_status = if std::env::var("GITHUB_TOKEN").is_ok_and(|v| !v.is_empty()) {
-            "GITHUB_TOKEN: set"
-        } else {
-            "GITHUB_TOKEN: not set"
-        };
-
-        let body: iced::widget::Column<'_, Message> = column![
-            text("Versions to show").size(14),
-            row![
-                text_input("10", &self.versions_to_show_input)
-                    .on_input(Message::VersionsToShowInputChanged)
-                    .on_submit(Message::VersionsToShowSubmit)
-                    .width(Length::Fixed(120.0)),
-                button("Apply").on_press(Message::VersionsToShowSubmit),
-            ]
-            .spacing(6),
-            text("Library root").size(14),
-            text_input("path", &self.library_root_input).on_input(Message::LibraryRootInputChanged),
-            text("Existing installs are not moved when you change this.").size(11),
-            row![button("Save").on_press(Message::SaveSettings)].spacing(6),
-            section_header("GitHub"),
-            text(rate).size(12),
-            text(token_status).size(12),
-        ]
-        .spacing(8);
-
-        scrollable(body).height(Length::Fill).into()
-    }
-
-    fn modal_view(&self) -> Element<'_, Message> {
-        match &self.modal {
-            Modal::Closed => column![].into(),
-            Modal::ClearCachedConfirm {
-                tag,
-                game_slug,
-                planned,
-            } => {
-                let copy =
-                    "These files live in this install's directory and only affect this version.";
-                let mut col = column![
-                    text(format!("Clear cached assets for {game_slug} {tag}?")).size(14),
-                    text(copy).size(12),
-                ]
-                .spacing(6);
-                for p in planned {
-                    col = col
-                        .push(text(format!("• {} ({} bytes)", p.path.display(), p.size)).size(12));
-                }
-                let tag_owned = tag.clone();
-                col.push(
-                    row![
-                        button("Confirm")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::ClearCachedAssetsConfirm(tag_owned)),
-                        button("Cancel")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::ClearCachedAssetsCancel),
-                    ]
-                    .spacing(6),
-                )
-                .into()
-            }
-            Modal::DeleteRomConfirm { filename } => {
-                let f = filename.clone();
-                column![
-                    text(format!("Delete ROM \"{filename}\"?")).size(14),
-                    text("This removes the file from your ROM library and clears any slot assignments referencing it.")
-                        .size(12),
-                    row![
-                        button("Delete")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::DeleteRomConfirm(f)),
-                        button("Cancel")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::DeleteRomCancel),
-                    ]
-                    .spacing(6),
-                ]
-                .spacing(6)
-                .into()
-            }
-            Modal::UninstallConfirm { tag } => {
-                let t = tag.clone();
-                column![
-                    text(format!("Uninstall {tag}?")).size(14),
-                    text("This deletes the install directory.").size(12),
-                    row![
-                        button("Uninstall")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::UninstallClicked(t)),
-                        button("Cancel")
-                            .width(Length::Fixed(MODAL_BUTTON_WIDTH))
-                            .on_press(Message::ClearCachedAssetsCancel),
-                    ]
-                    .spacing(6),
-                ]
-                .spacing(6)
-                .into()
-            }
-        }
-    }
-
     #[cfg(test)]
     pub fn install_state(&self, tag: &str) -> Option<&InstallState> {
         self.install_states.get(tag)
@@ -1219,83 +839,11 @@ impl App {
     }
 }
 
-fn section_header(s: &str) -> Element<'_, Message> {
-    text(s).size(15).into()
-}
-
-fn game_for_slug(slug: &str) -> Option<&'static dyn Game> {
+pub(crate) fn game_for_slug(slug: &str) -> Option<&'static dyn Game> {
     games_mod::registry()
         .iter()
         .copied()
         .find(|g| g.slug() == slug)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameChoice {
-    slug: String,
-    display_name: String,
-}
-
-impl std::fmt::Display for GameChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.display_name)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VersionChoice {
-    tag: String,
-    installed: bool,
-    latest: bool,
-}
-
-impl std::fmt::Display for VersionChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.tag)?;
-        if self.latest {
-            f.write_str(" (latest)")?;
-        }
-        if self.installed {
-            f.write_str(" ✓")?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotChoice {
-    filename: Option<String>,
-}
-
-impl SlotChoice {
-    fn unassigned() -> Self {
-        Self { filename: None }
-    }
-    fn filename(name: &str) -> Self {
-        Self {
-            filename: Some(name.to_string()),
-        }
-    }
-    fn into_filename(self) -> Option<String> {
-        self.filename
-    }
-}
-
-impl std::fmt::Display for SlotChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.filename {
-            Some(name) => f.write_str(name),
-            None => f.write_str("(unassigned)"),
-        }
-    }
-}
-
-fn tab_button(label: &str, selected: bool, tab: Tab) -> Element<'_, Message> {
-    let mut b = button(text(label)).width(Length::Fixed(TAB_BUTTON_WIDTH));
-    if !selected {
-        b = b.on_press(Message::TabSelected(tab));
-    }
-    b.into()
 }
 
 #[cfg(test)]
@@ -1441,7 +989,6 @@ mod tests {
             library_root: library_root.clone(),
             rom_library_root: dir.path().join("roms"),
             download_dir: download_dir.clone(),
-            cache_dir: dir.path().to_path_buf(),
             game: static_game(),
             platform: static_platform(),
             client: client.clone(),
@@ -1526,7 +1073,6 @@ mod tests {
             library_root: library_root.clone(),
             rom_library_root: dir.path().join("roms"),
             download_dir: dir.path().join("dl"),
-            cache_dir: dir.path().to_path_buf(),
             game: static_game(),
             platform: static_platform(),
             client,
@@ -1566,7 +1112,6 @@ mod tests {
             library_root: library_root.clone(),
             rom_library_root: rom_library_root.clone(),
             download_dir: dir.path().join("dl"),
-            cache_dir: dir.path().to_path_buf(),
             game: static_game(),
             platform: static_platform(),
             client: client.clone(),
@@ -1661,7 +1206,6 @@ mod tests {
             library_root: dir.path().join("library"),
             rom_library_root: dir.path().join("roms"),
             download_dir: dir.path().join("dl"),
-            cache_dir: dir.path().to_path_buf(),
             game: static_game(),
             platform: static_platform(),
             client,

@@ -24,7 +24,6 @@ fn main() -> iced::Result {
             .unwrap_or_else(|| platform.default_library_root());
         let download_dir = platform.cache_dir().join("downloads");
         let cache_path = platform.cache_dir().join("etags.json");
-        let cache_dir = platform.cache_dir();
 
         let client = Arc::new(github::Client::new(cache_path).expect("init github client"));
 
@@ -51,7 +50,6 @@ fn main() -> iced::Result {
             library_root,
             rom_library_root,
             download_dir,
-            cache_dir,
             game,
             platform,
             client,

@@ -13,7 +13,7 @@ pub fn expand_path(p: &Path) -> PathBuf {
     }
 }
 
-pub fn expand(s: &str) -> String {
+fn expand(s: &str) -> String {
     let with_home = expand_tilde(s);
     expand_env(&with_home)
 }
