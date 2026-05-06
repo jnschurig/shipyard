@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background: navy rounded square -->
+  <rect x="0" y="0" width="512" height="512" rx="96" ry="96" fill="#0f1f3d"/>
+
+  <g stroke="#e8d3a2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+
+    <!-- =========================================================
+         ROPES — sparse, anchored at spread-out points,
+         continuing past the lower yardarm down off-frame
+         (toward the implied deck/chainplates). -->
+    <g stroke-width="5">
+
+      <!-- Outer shrouds: anchored at the rigging ring on the mast,
+           cross the lower yardarm well inboard of its tips, and
+           continue down off the bottom of the frame. -->
+      <line x1="234" y1="156" x2="72"  y2="512"/>
+      <line x1="278" y1="156" x2="440" y2="512"/>
+
+      <!-- Inner shrouds: also anchored at the ring, slightly inboard. -->
+      <line x1="244" y1="160" x2="160" y2="512"/>
+      <line x1="268" y1="160" x2="352" y2="512"/>
+
+      <!-- A single ratline row across the shroud fan -->
+      <path d="M188 220 H324"/>
+
+    </g>
+
+    <!-- =========================================================
+         WOODEN SPARS -->
+    <g stroke-width="12">
+
+      <!-- Main vertical mast -->
+      <line x1="256" y1="64" x2="256" y2="512"/>
+
+      <!-- Rigging ring on the mast: the ropes converge here. -->
+      <ellipse cx="256" cy="152" rx="26" ry="6" stroke-width="9" fill="#0f1f3d"/>
+
+      <!-- Lower yardarm -->
+      <line x1="108" y1="408" x2="404" y2="408"/>
+      <line x1="104" y1="400" x2="104" y2="416" stroke-width="8"/>
+      <line x1="408" y1="400" x2="408" y2="416" stroke-width="8"/>
+
+    </g>
+
+    <!-- =========================================================
+         CROW'S NEST -->
+    <g stroke-width="9">
+      <!-- Inverted trapezoid: wide rail on top, narrower floor below.
+           Filled with the background color to mask rigging behind. -->
+      <path d="M176 280 L336 280 L308 380 L204 380 Z"
+            fill="#0f1f3d" stroke="#e8d3a2"/>
+      <!-- Basket poles running from the rail down to the floor,
+           tracking the trapezoid taper. -->
+      <line x1="216" y1="280" x2="230" y2="380"/>
+      <line x1="256" y1="280" x2="256" y2="380"/>
+      <line x1="296" y1="280" x2="282" y2="380"/>
+    </g>
+
+    <!-- =========================================================
+         PENNANT FLAG -->
+    <path d="M256 72 L330 92 L256 104 Z"
+          fill="#e8d3a2" stroke="#e8d3a2" stroke-width="3"/>
+
+  </g>
+</svg>

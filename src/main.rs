@@ -2,6 +2,22 @@ use std::sync::Arc;
 
 use shipyard::{app, config, games, github, platform, roms};
 
+const ICON_SVG: &[u8] = include_bytes!("../assets/icon.svg");
+const ICON_RENDER_SIZE: u32 = 256;
+
+fn load_window_icon() -> Option<iced::window::Icon> {
+    let tree = usvg::Tree::from_data(ICON_SVG, &usvg::Options::default()).ok()?;
+    let svg_size = tree.size();
+    let scale = ICON_RENDER_SIZE as f32 / svg_size.width().max(svg_size.height());
+    let mut pixmap = tiny_skia::Pixmap::new(ICON_RENDER_SIZE, ICON_RENDER_SIZE)?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    iced::window::icon::from_rgba(pixmap.take(), ICON_RENDER_SIZE, ICON_RENDER_SIZE).ok()
+}
+
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -12,7 +28,14 @@ fn main() -> iced::Result {
 
     tracing::info!("shipyard {} starting", env!("CARGO_PKG_VERSION"));
 
-    iced::application("Shipyard", app::App::update, app::App::view).run_with(|| {
+    let window_settings = iced::window::Settings {
+        icon: load_window_icon(),
+        ..Default::default()
+    };
+
+    iced::application("Shipyard", app::App::update, app::App::view)
+        .window(window_settings)
+        .run_with(|| {
         let platform = platform::current();
         let game = games::registry()[0];
 
