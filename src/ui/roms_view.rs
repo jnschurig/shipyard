@@ -1,4 +1,4 @@
-use iced::widget::{button, column, pick_list, row, scrollable, text};
+use iced::widget::{button, column, container, horizontal_rule, pick_list, row, scrollable, text};
 use iced::{Element, Length};
 
 use crate::app::{App, Message};
@@ -64,9 +64,18 @@ impl App {
         }
 
         body = body.push(super::section_header("Slot Assignments"));
+
+        let mut table: iced::widget::Column<'_, Message> = column![].spacing(0);
+        let mut first = true;
         for game in games_mod::registry() {
-            body = body.push(text(game.rom_group_name()).size(14));
             for slot in game.slots() {
+                if !first {
+                    table = table.push(
+                        container(horizontal_rule(1)).padding([0, 8]),
+                    );
+                }
+                first = false;
+
                 let current = self
                     .config
                     .assignment_for(game.slug(), slot.id)
@@ -86,12 +95,51 @@ impl App {
                         slot_id: slot_id.clone(),
                         filename: c.into_filename(),
                     }
-                });
-                body = body.push(
-                    row![text(slot.display_name).width(Length::Fill).size(12), picker].spacing(6),
-                );
+                })
+                .width(Length::Fixed(360.0));
+
+                let label = text(slot.display_name)
+                    .size(13)
+                    .width(Length::Fixed(240.0));
+                let row_el = row![label, text("").width(Length::Fill), picker]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center);
+                table = table.push(container(row_el).padding([8, 12]));
             }
         }
+
+        let table_card = container(table)
+            .width(Length::Fill)
+            .style(|theme: &iced::Theme| {
+                let palette = theme.extended_palette();
+                let base = palette.background.base.color;
+                let is_dark = palette.is_dark;
+                let bg = if is_dark {
+                    iced::Color {
+                        r: (base.r - 0.04).max(0.0),
+                        g: (base.g - 0.04).max(0.0),
+                        b: (base.b - 0.04).max(0.0),
+                        a: 1.0,
+                    }
+                } else {
+                    iced::Color {
+                        r: (base.r - 0.06).max(0.0),
+                        g: (base.g - 0.06).max(0.0),
+                        b: (base.b - 0.06).max(0.0),
+                        a: 1.0,
+                    }
+                };
+                iced::widget::container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    border: iced::Border {
+                        color: palette.background.strong.color,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..iced::widget::container::Style::default()
+                }
+            });
+        body = body.push(table_card);
 
         scrollable(body).height(Length::Fill).into()
     }
