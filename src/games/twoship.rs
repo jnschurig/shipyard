@@ -46,12 +46,8 @@ impl Game for TwoShip {
         "Majora's Mask"
     }
 
-    /// 2Ship writes its baked archive to a user-global app-support directory,
-    /// not into the install dir. The path is shared across every 2Ship
-    /// install — once any install bakes `mm.o2r`, all installs can launch
-    /// without re-symlinking the ROM.
-    fn data_dir(&self, _install_dir: &Path, _platform: &dyn Platform) -> PathBuf {
-        twoship_app_support_dir()
+    fn data_dir(&self, install_dir: &Path, _platform: &dyn Platform) -> PathBuf {
+        install_dir.to_path_buf()
     }
 
     fn slots(&self) -> &'static [SlotSpec] {
@@ -91,12 +87,6 @@ impl Game for TwoShip {
             other => Err(anyhow!("2Ship: unsupported platform keyword {other}")),
         }
     }
-}
-
-fn twoship_app_support_dir() -> PathBuf {
-    directories::ProjectDirs::from("com", "2ship2harkinian", "2s2h")
-        .map(|d| d.data_dir().to_path_buf())
-        .expect("no home directory available for 2Ship app-support resolution")
 }
 
 #[cfg(target_os = "macos")]
@@ -202,18 +192,12 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_path_contains_app_support_marker() {
-        // We can't assert an absolute path (HOME-dependent) but we can
-        // confirm the trailing component matches what 2Ship writes to.
-        let p = TwoShip.data_dir(Path::new("/ignored"), &MacOs);
-        let s = p.to_string_lossy();
-        assert!(
-            s.contains("com.2ship2harkinian.2s2h"),
-            "data_dir = {s}, expected to contain com.2ship2harkinian.2s2h"
-        );
+    fn data_dir_is_install_dir() {
+        let install = Path::new("/some/install");
+        assert_eq!(TwoShip.data_dir(install, &MacOs), install);
     }
 
-    #[test]
+#[test]
     fn extract_linux_handles_nested_appimage() {
         let dir = tempdir().unwrap();
         let archive = dir.path().join("release.zip");
