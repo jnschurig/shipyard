@@ -9,50 +9,36 @@ use crate::github::ReleaseAsset;
 use crate::library::extract::{find_first_with_ext, find_first_with_ext_recursive, unzip};
 use crate::platform::Platform;
 
-pub const SLOT_OOT: &str = "oot";
-pub const SLOT_OOT_MQ: &str = "oot-mq";
+pub const SLOT_SM64: &str = "sm64";
 
-const SLOTS: &[SlotSpec] = &[
-    SlotSpec {
-        id: SLOT_OOT,
-        display_name: "Ocarina of Time",
-        symlink_filename: "oot.z64",
-    },
-    SlotSpec {
-        id: SLOT_OOT_MQ,
-        display_name: "Ocarina of Time - Master Quest",
-        symlink_filename: "oot-mq.z64",
-    },
-];
+const SLOTS: &[SlotSpec] = &[SlotSpec {
+    id: SLOT_SM64,
+    display_name: "Super Mario 64",
+    symlink_filename: "sm64.z64",
+}];
 
-const CACHED_ASSETS: &[CachedAssetSpec] = &[
-    CachedAssetSpec {
-        slot_id: SLOT_OOT,
-        filenames: &["oot.o2r", "oot.otr"],
-    },
-    CachedAssetSpec {
-        slot_id: SLOT_OOT_MQ,
-        filenames: &["oot-mq.o2r", "oot-mq.otr"],
-    },
-];
+const CACHED_ASSETS: &[CachedAssetSpec] = &[CachedAssetSpec {
+    slot_id: SLOT_SM64,
+    filenames: &["sm64.o2r"],
+}];
 
-pub struct Soh;
+pub struct Ghostship;
 
-impl Game for Soh {
+impl Game for Ghostship {
     fn slug(&self) -> &'static str {
-        "soh"
+        "ghostship"
     }
 
     fn repo_slug(&self) -> &'static str {
-        "HarbourMasters/Shipwright"
+        "HarbourMasters/Ghostship"
     }
 
     fn display_name(&self) -> &'static str {
-        "Ship of Harkinian"
+        "Ghostship"
     }
 
     fn rom_group_name(&self) -> &'static str {
-        "Ocarina of Time"
+        "Super Mario 64"
     }
 
     fn data_dir(&self, install_dir: &Path, _platform: &dyn Platform) -> PathBuf {
@@ -65,6 +51,10 @@ impl Game for Soh {
 
     fn cached_assets(&self) -> &'static [CachedAssetSpec] {
         CACHED_ASSETS
+    }
+
+    fn requires_rom_copy(&self) -> bool {
+        false
     }
 
     fn pick_asset<'a>(
@@ -80,9 +70,9 @@ impl Game for Soh {
 
     fn launch_command(&self, install_dir: &Path, platform: &dyn Platform) -> Command {
         let bin = match platform.asset_keyword() {
-            "Mac" => install_dir.join("soh.app/Contents/MacOS/soh"),
-            "Linux" => install_dir.join("soh.appimage"),
-            _ => install_dir.join("soh"),
+            "Mac" => install_dir.join("Ghostship.app/Contents/MacOS/Ghostship"),
+            "Linux" => install_dir.join("ghostship.appimage"),
+            _ => install_dir.join("ghostship"),
         };
         let mut cmd = Command::new(bin);
         cmd.current_dir(install_dir);
@@ -93,7 +83,7 @@ impl Game for Soh {
         match platform.asset_keyword() {
             "Mac" => extract_mac(archive, dest),
             "Linux" => extract_linux(archive, dest),
-            other => Err(anyhow!("SoH: unsupported platform keyword {other}")),
+            other => Err(anyhow!("Ghostship: unsupported platform keyword {other}")),
         }
     }
 }
@@ -103,7 +93,7 @@ fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
     use crate::library::extract::{copy_dir_recursive, mount_dmg};
 
     let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
-    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
+    unzip(archive, scratch.path()).context("unzip ghostship release")?;
 
     let dmg = find_first_with_ext(scratch.path(), "dmg")?;
     let mount = mount_dmg(&dmg)?;
@@ -118,12 +108,14 @@ fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn extract_mac(_archive: &Path, _dest: &Path) -> Result<()> {
-    Err(anyhow!("SoH macOS extraction is only available on macOS"))
+    Err(anyhow!(
+        "Ghostship macOS extraction is only available on macOS"
+    ))
 }
 
 fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
     let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
-    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
+    unzip(archive, scratch.path()).context("unzip ghostship release")?;
 
     let appimage = find_first_with_ext_recursive(scratch.path(), "appimage")?;
     fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
@@ -141,9 +133,10 @@ fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::ReleaseAsset;
     use crate::platform::{linux::Linux, macos::MacOs};
     use std::collections::HashSet;
+    use std::io::Write;
+    use tempfile::tempdir;
 
     fn asset(name: &str) -> ReleaseAsset {
         ReleaseAsset {
@@ -155,81 +148,78 @@ mod tests {
 
     fn fixture_assets() -> Vec<ReleaseAsset> {
         vec![
-            asset("SoH-Ackbar-Delta-Linux.zip"),
-            asset("SoH-Ackbar-Delta-Mac.zip"),
-            asset("SoH-Ackbar-Delta-Win64.zip"),
+            asset("Ghostship-Dutchman-Charlie-Linux.zip"),
+            asset("Ghostship-Dutchman-Charlie-Mac.zip"),
+            asset("Ghostship-Dutchman-Charlie-Win64.zip"),
         ]
     }
 
     #[test]
     fn picks_mac_asset_on_macos() {
         let assets = fixture_assets();
-        let picked = Soh.pick_asset(&assets, &MacOs).unwrap();
-        assert_eq!(picked.name, "SoH-Ackbar-Delta-Mac.zip");
+        let picked = Ghostship.pick_asset(&assets, &MacOs).unwrap();
+        assert_eq!(picked.name, "Ghostship-Dutchman-Charlie-Mac.zip");
     }
 
     #[test]
     fn picks_linux_asset_on_linux() {
         let assets = fixture_assets();
-        let picked = Soh.pick_asset(&assets, &Linux).unwrap();
-        assert_eq!(picked.name, "SoH-Ackbar-Delta-Linux.zip");
+        let picked = Ghostship.pick_asset(&assets, &Linux).unwrap();
+        assert_eq!(picked.name, "Ghostship-Dutchman-Charlie-Linux.zip");
     }
 
     #[test]
     fn returns_none_when_no_matching_asset() {
-        let assets = vec![asset("SoH-Ackbar-Delta-Win64.zip")];
-        assert!(Soh.pick_asset(&assets, &MacOs).is_none());
-        assert!(Soh.pick_asset(&assets, &Linux).is_none());
+        let assets = vec![asset("Ghostship-Dutchman-Charlie-Win64.zip")];
+        assert!(Ghostship.pick_asset(&assets, &MacOs).is_none());
+        assert!(Ghostship.pick_asset(&assets, &Linux).is_none());
     }
 
     #[test]
-    fn slots_returns_oot_and_oot_mq() {
-        let slots = Soh.slots();
-        assert_eq!(slots.len(), 2);
-        assert_eq!(slots[0].id, SLOT_OOT);
-        assert_eq!(slots[0].symlink_filename, "oot.z64");
-        assert_eq!(slots[0].display_name, "Ocarina of Time");
-        assert_eq!(slots[1].id, SLOT_OOT_MQ);
-        assert_eq!(slots[1].symlink_filename, "oot-mq.z64");
-        assert_eq!(slots[1].display_name, "Ocarina of Time - Master Quest");
+    fn slots_returns_single_sm64_slot() {
+        let slots = Ghostship.slots();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].id, SLOT_SM64);
+        assert_eq!(slots[0].symlink_filename, "sm64.z64");
+        assert_eq!(slots[0].display_name, "Super Mario 64");
     }
 
     #[test]
     fn cached_asset_slot_ids_match_declared_slots() {
-        let slot_ids: HashSet<&str> = Soh.slots().iter().map(|s| s.id).collect();
-        for ca in Soh.cached_assets() {
-            assert!(
-                slot_ids.contains(ca.slot_id),
-                "cached asset slot_id {:?} is not declared in slots()",
-                ca.slot_id
-            );
+        let slot_ids: HashSet<&str> = Ghostship.slots().iter().map(|s| s.id).collect();
+        for ca in Ghostship.cached_assets() {
+            assert!(slot_ids.contains(ca.slot_id));
         }
     }
 
     #[test]
-    fn extract_appimage_zip_on_unix() {
-        use std::fs;
-        use std::io::Write;
-        use tempfile::tempdir;
+    fn data_dir_is_install_dir() {
+        let install = Path::new("/some/install");
+        assert_eq!(Ghostship.data_dir(install, &MacOs), install);
+    }
 
+    #[test]
+    fn extract_linux_handles_nested_appimage() {
         let dir = tempdir().unwrap();
         let archive = dir.path().join("release.zip");
         let f = fs::File::create(&archive).unwrap();
         let mut w = zip::ZipWriter::new(f);
         let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
-        w.start_file("readme.txt", opts).unwrap();
-        w.write_all(b"hi").unwrap();
-        w.start_file("soh.appimage", opts).unwrap();
-        w.write_all(b"\x7fELF-fake-appimage-body").unwrap();
+        w.start_file("Ghostship-Dutchman-Charlie-Linux/readme.txt", opts)
+            .unwrap();
+        w.write_all(b"readme").unwrap();
+        w.start_file("Ghostship-Dutchman-Charlie-Linux/ghostship.appimage", opts)
+            .unwrap();
+        w.write_all(b"appimage-body").unwrap();
         w.finish().unwrap();
 
         let dest = dir.path().join("install");
-        Soh.extract(&archive, &dest, &Linux).unwrap();
+        Ghostship.extract(&archive, &dest, &Linux).unwrap();
 
-        let target = dest.join("soh.appimage");
-        assert!(target.exists());
-        assert_eq!(fs::read(&target).unwrap(), b"\x7fELF-fake-appimage-body");
+        let target = dest.join("ghostship.appimage");
+        assert!(target.exists(), "expected {} to exist", target.display());
+        assert_eq!(fs::read(&target).unwrap(), b"appimage-body");
 
         #[cfg(unix)]
         {

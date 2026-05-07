@@ -6,6 +6,7 @@ use anyhow::Result;
 use crate::github::ReleaseAsset;
 use crate::platform::Platform;
 
+pub mod ghostship;
 pub mod soh;
 pub mod twoship;
 
@@ -60,6 +61,19 @@ pub trait Game: Send + Sync {
     /// `slots()`.
     fn cached_assets(&self) -> &'static [CachedAssetSpec];
 
+    /// Whether this game requires the ROM to be a real file copy in the install
+    /// dir rather than a symlink. Default is symlink — every shipping game today
+    /// (SoH, 2Ship, Ghostship) follows symlinks fine, since libultraship's
+    /// resource resolver dereferences before reading.
+    ///
+    /// Override to `true` if a future port's loader rejects symlinks and demands
+    /// a regular file. The copy path lives in `roms::wiring::reconcile`
+    /// (atomic copy → rename, size-based skip-if-equal) and is exercised by
+    /// tests in that module — so flipping this flag is a one-line change.
+    fn requires_rom_copy(&self) -> bool {
+        false
+    }
+
     fn pick_asset<'a>(
         &self,
         assets: &'a [ReleaseAsset],
@@ -76,5 +90,5 @@ pub trait Game: Send + Sync {
 }
 
 pub fn registry() -> &'static [&'static dyn Game] {
-    &[&soh::Soh, &twoship::TwoShip]
+    &[&soh::Soh, &twoship::TwoShip, &ghostship::Ghostship]
 }

@@ -106,9 +106,10 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(target_os = "macos")]
 pub fn mount_dmg(dmg: &Path) -> Result<MountGuard> {
     use anyhow::bail;
-    use std::process::Command;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     let mount_dir = tempfile::tempdir().context("mktemp dmg mount dir")?.keep();
-    let out = Command::new("hdiutil")
+    let mut child = Command::new("hdiutil")
         .args([
             "attach",
             "-nobrowse",
@@ -118,8 +119,15 @@ pub fn mount_dmg(dmg: &Path) -> Result<MountGuard> {
         ])
         .arg(&mount_dir)
         .arg(dmg)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("spawn hdiutil")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"Y\n");
+    }
+    let out = child.wait_with_output().context("wait hdiutil")?;
     if !out.status.success() {
         bail!(
             "hdiutil attach failed: {}",

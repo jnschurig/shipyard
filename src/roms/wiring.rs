@@ -30,19 +30,54 @@ pub fn reconcile(
     config: &Config,
     library_root: &Path,
 ) -> io::Result<()> {
+    let needs_copy = game.requires_rom_copy();
     for slot in game.slots() {
-        let symlink_path = install_dir.join(slot.symlink_filename);
+        let dest = install_dir.join(slot.symlink_filename);
         match config.assignment_for(game.slug(), slot.id) {
             Some(filename) => {
                 let target = library_root.join(filename);
-                place_symlink(&symlink_path, &target)?;
+                if needs_copy {
+                    place_copy(&dest, &target)?;
+                } else {
+                    place_symlink(&dest, &target)?;
+                }
             }
-            None => match std::fs::remove_file(&symlink_path) {
+            None => match std::fs::remove_file(&dest) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
             },
         }
+    }
+    Ok(())
+}
+
+/// Place a regular-file copy of `target` at `dest`, atomically (copy → rename).
+/// Skips when `dest` is already a regular file matching `target` by size
+/// (cheap heuristic — ROMs imported into the library don't get rewritten in
+/// place, so size equality is sufficient and avoids re-hashing every launch).
+fn place_copy(dest: &Path, target: &Path) -> io::Result<()> {
+    let target_meta = std::fs::metadata(target)?;
+    if let Ok(existing) = std::fs::symlink_metadata(dest)
+        && existing.file_type().is_file()
+        && existing.len() == target_meta.len()
+    {
+        return Ok(());
+    }
+
+    let tmp = match dest.file_name() {
+        Some(name) => {
+            let mut t = name.to_os_string();
+            t.push(".tmp");
+            dest.with_file_name(t)
+        }
+        None => return Err(io::Error::other("copy dest has no filename")),
+    };
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::copy(target, &tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
     Ok(())
 }
@@ -233,6 +268,46 @@ mod tests {
 
         assert!(install.join("readme.txt").exists());
         assert!(install.join("game.exe").exists());
+    }
+
+    #[test]
+    fn copies_rom_when_game_requires_copy() {
+        use crate::games::ghostship::{Ghostship, SLOT_SM64};
+        let dir = tempdir().unwrap();
+        let install = dir.path().join("install");
+        fs::create_dir_all(&install).unwrap();
+        let lib = dir.path().join("lib");
+        let target = make_rom(&lib, "sm64.z64");
+
+        let mut config = Config::default();
+        config.set_assignment("ghostship", SLOT_SM64, Some("sm64.z64".into()));
+        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
+
+        let placed = install.join("sm64.z64");
+        assert!(placed.is_file());
+        assert!(!placed.is_symlink());
+        assert_eq!(fs::read(&placed).unwrap(), fs::read(&target).unwrap());
+    }
+
+    #[test]
+    fn copy_reconcile_is_idempotent_and_replaces_stale_symlink() {
+        use crate::games::ghostship::{Ghostship, SLOT_SM64};
+        let dir = tempdir().unwrap();
+        let install = dir.path().join("install");
+        fs::create_dir_all(&install).unwrap();
+        let lib = dir.path().join("lib");
+        make_rom(&lib, "sm64.z64");
+        // Stale symlink left behind from a prior symlink-mode reconcile.
+        std::os::unix::fs::symlink(lib.join("sm64.z64"), install.join("sm64.z64")).unwrap();
+
+        let mut config = Config::default();
+        config.set_assignment("ghostship", SLOT_SM64, Some("sm64.z64".into()));
+        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
+        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
+
+        let placed = install.join("sm64.z64");
+        assert!(placed.is_file());
+        assert!(!placed.is_symlink());
     }
 
     /// A game whose cached_assets have a slot_id NOT in slots() — proves we
