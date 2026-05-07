@@ -1,8 +1,9 @@
-use iced::widget::{button, column, container, horizontal_rule, pick_list, row, scrollable, text};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text};
 use iced::{Element, Length};
 
 use crate::app::{App, Message};
 use crate::games as games_mod;
+use crate::ui::{TABLE_ROW_PADDING, table_card_style, table_row_separator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SlotChoice {
@@ -54,7 +55,7 @@ impl App {
                 let mut first = true;
                 for r in &self.roms {
                     if !first {
-                        roms_table = roms_table.push(container(horizontal_rule(1)).padding([0, 8]));
+                        roms_table = roms_table.push(table_row_separator());
                     }
                     first = false;
                     let filename = r.filename.clone();
@@ -62,73 +63,47 @@ impl App {
                         weight: iced::font::Weight::Bold,
                         ..iced::Font::DEFAULT
                     }))
-                        .on_press(Message::DeleteRomClicked(filename))
-                        .style(|theme: &iced::Theme, status| {
-                            let palette = theme.extended_palette();
-                            let bg = match status {
-                                button::Status::Hovered | button::Status::Pressed => iced::Color {
-                                    r: 0.75,
-                                    g: 0.18,
-                                    b: 0.18,
-                                    a: 1.0,
-                                },
-                                _ => iced::Color {
-                                    r: 0.65,
-                                    g: 0.13,
-                                    b: 0.13,
-                                    a: 1.0,
-                                },
-                            };
-                            button::Style {
-                                background: Some(iced::Background::Color(bg)),
-                                text_color: iced::Color::WHITE,
-                                border: iced::Border {
-                                    color: palette.background.strong.color,
-                                    width: 0.0,
-                                    radius: 4.0.into(),
-                                },
-                                ..button::Style::default()
-                            }
-                        });
+                    .on_press(Message::DeleteRomClicked(filename))
+                    .style(|theme: &iced::Theme, status| {
+                        let palette = theme.extended_palette();
+                        let bg = match status {
+                            button::Status::Hovered | button::Status::Pressed => iced::Color {
+                                r: 0.75,
+                                g: 0.18,
+                                b: 0.18,
+                                a: 1.0,
+                            },
+                            _ => iced::Color {
+                                r: 0.65,
+                                g: 0.13,
+                                b: 0.13,
+                                a: 1.0,
+                            },
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: iced::Color::WHITE,
+                            border: iced::Border {
+                                color: palette.background.strong.color,
+                                width: 0.0,
+                                radius: 4.0.into(),
+                            },
+                            ..button::Style::default()
+                        }
+                    });
                     let row_el = row![
                         text(r.filename.clone()).width(Length::Fill).size(13),
                         delete_btn,
                     ]
                     .spacing(12)
                     .align_y(iced::Alignment::Center);
-                    roms_table = roms_table.push(container(row_el).padding([8, 12]));
+                    roms_table = roms_table.push(container(row_el).padding(TABLE_ROW_PADDING));
                 }
-                body = body.push(container(roms_table).width(Length::Fill).style(
-                    |theme: &iced::Theme| {
-                        let palette = theme.extended_palette();
-                        let base = palette.background.base.color;
-                        let is_dark = palette.is_dark;
-                        let bg = if is_dark {
-                            iced::Color {
-                                r: (base.r - 0.04).max(0.0),
-                                g: (base.g - 0.04).max(0.0),
-                                b: (base.b - 0.04).max(0.0),
-                                a: 1.0,
-                            }
-                        } else {
-                            iced::Color {
-                                r: (base.r - 0.06).max(0.0),
-                                g: (base.g - 0.06).max(0.0),
-                                b: (base.b - 0.06).max(0.0),
-                                a: 1.0,
-                            }
-                        };
-                        iced::widget::container::Style {
-                            background: Some(iced::Background::Color(bg)),
-                            border: iced::Border {
-                                color: palette.background.strong.color,
-                                width: 1.0,
-                                radius: 6.0.into(),
-                            },
-                            ..iced::widget::container::Style::default()
-                        }
-                    },
-                ));
+                body = body.push(
+                    container(roms_table)
+                        .width(Length::Fill)
+                        .style(table_card_style),
+                );
             }
         }
 
@@ -139,7 +114,7 @@ impl App {
         for game in games_mod::registry() {
             for slot in game.slots() {
                 if !first {
-                    table = table.push(container(horizontal_rule(1)).padding([0, 8]));
+                    table = table.push(table_row_separator());
                 }
                 first = false;
 
@@ -169,41 +144,11 @@ impl App {
                 let row_el = row![label, text("").width(Length::Fill), picker]
                     .spacing(12)
                     .align_y(iced::Alignment::Center);
-                table = table.push(container(row_el).padding([8, 12]));
+                table = table.push(container(row_el).padding(TABLE_ROW_PADDING));
             }
         }
 
-        let table_card = container(table)
-            .width(Length::Fill)
-            .style(|theme: &iced::Theme| {
-                let palette = theme.extended_palette();
-                let base = palette.background.base.color;
-                let is_dark = palette.is_dark;
-                let bg = if is_dark {
-                    iced::Color {
-                        r: (base.r - 0.04).max(0.0),
-                        g: (base.g - 0.04).max(0.0),
-                        b: (base.b - 0.04).max(0.0),
-                        a: 1.0,
-                    }
-                } else {
-                    iced::Color {
-                        r: (base.r - 0.06).max(0.0),
-                        g: (base.g - 0.06).max(0.0),
-                        b: (base.b - 0.06).max(0.0),
-                        a: 1.0,
-                    }
-                };
-                iced::widget::container::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    border: iced::Border {
-                        color: palette.background.strong.color,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..iced::widget::container::Style::default()
-                }
-            });
+        let table_card = container(table).width(Length::Fill).style(table_card_style);
         body = body.push(table_card);
 
         scrollable(body).height(Length::Fill).into()

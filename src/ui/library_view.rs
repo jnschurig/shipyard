@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, horizontal_rule, pick_list, row, scrollable, text};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text};
 use iced::{Element, Length};
 
 use crate::app::{App, InstallState, Message};
@@ -45,7 +45,7 @@ impl App {
         let mut first = true;
         for game in games {
             if !first {
-                table = table.push(container(horizontal_rule(1)).padding([0, 8]));
+                table = table.push(crate::ui::table_row_separator());
             }
             first = false;
             table = table.push(self.library_row(game));
@@ -53,35 +53,7 @@ impl App {
 
         let table_card = container(table)
             .width(Length::Fixed(ACTION_ROW_WIDTH + 24.0))
-            .style(|theme: &iced::Theme| {
-                let palette = theme.extended_palette();
-                let base = palette.background.base.color;
-                let is_dark = palette.is_dark;
-                let bg = if is_dark {
-                    iced::Color {
-                        r: (base.r - 0.04).max(0.0),
-                        g: (base.g - 0.04).max(0.0),
-                        b: (base.b - 0.04).max(0.0),
-                        a: 1.0,
-                    }
-                } else {
-                    iced::Color {
-                        r: (base.r - 0.06).max(0.0),
-                        g: (base.g - 0.06).max(0.0),
-                        b: (base.b - 0.06).max(0.0),
-                        a: 1.0,
-                    }
-                };
-                container::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    border: iced::Border {
-                        color: palette.background.strong.color,
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            });
+            .style(crate::ui::table_card_style);
 
         scrollable(column![table_card].spacing(12))
             .height(Length::Fill)
