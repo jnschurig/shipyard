@@ -50,16 +50,85 @@ impl App {
             if self.roms.is_empty() {
                 body = body.push(text("(none)").size(12));
             } else {
+                let mut roms_table: iced::widget::Column<'_, Message> = column![].spacing(0);
+                let mut first = true;
                 for r in &self.roms {
+                    if !first {
+                        roms_table = roms_table.push(container(horizontal_rule(1)).padding([0, 8]));
+                    }
+                    first = false;
                     let filename = r.filename.clone();
-                    body = body.push(
-                        row![
-                            text(r.filename.clone()).width(Length::Fill).size(12),
-                            button(text("✕")).on_press(Message::DeleteRomClicked(filename)),
-                        ]
-                        .spacing(6),
-                    );
+                    let delete_btn = button(text("X").size(14).font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..iced::Font::DEFAULT
+                    }))
+                        .on_press(Message::DeleteRomClicked(filename))
+                        .style(|theme: &iced::Theme, status| {
+                            let palette = theme.extended_palette();
+                            let bg = match status {
+                                button::Status::Hovered | button::Status::Pressed => iced::Color {
+                                    r: 0.75,
+                                    g: 0.18,
+                                    b: 0.18,
+                                    a: 1.0,
+                                },
+                                _ => iced::Color {
+                                    r: 0.65,
+                                    g: 0.13,
+                                    b: 0.13,
+                                    a: 1.0,
+                                },
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: iced::Color::WHITE,
+                                border: iced::Border {
+                                    color: palette.background.strong.color,
+                                    width: 0.0,
+                                    radius: 4.0.into(),
+                                },
+                                ..button::Style::default()
+                            }
+                        });
+                    let row_el = row![
+                        text(r.filename.clone()).width(Length::Fill).size(13),
+                        delete_btn,
+                    ]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center);
+                    roms_table = roms_table.push(container(row_el).padding([8, 12]));
                 }
+                body = body.push(container(roms_table).width(Length::Fill).style(
+                    |theme: &iced::Theme| {
+                        let palette = theme.extended_palette();
+                        let base = palette.background.base.color;
+                        let is_dark = palette.is_dark;
+                        let bg = if is_dark {
+                            iced::Color {
+                                r: (base.r - 0.04).max(0.0),
+                                g: (base.g - 0.04).max(0.0),
+                                b: (base.b - 0.04).max(0.0),
+                                a: 1.0,
+                            }
+                        } else {
+                            iced::Color {
+                                r: (base.r - 0.06).max(0.0),
+                                g: (base.g - 0.06).max(0.0),
+                                b: (base.b - 0.06).max(0.0),
+                                a: 1.0,
+                            }
+                        };
+                        iced::widget::container::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            border: iced::Border {
+                                color: palette.background.strong.color,
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            },
+                            ..iced::widget::container::Style::default()
+                        }
+                    },
+                ));
             }
         }
 
