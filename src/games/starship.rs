@@ -5,8 +5,7 @@ use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::install_flat_release;
-use crate::platform::Platform;
+use crate::platform::{Platform, linux};
 
 pub const SLOT_SF64_US: &str = "sf64-us";
 pub const SLOT_SF64_EU: &str = "sf64-eu";
@@ -104,7 +103,7 @@ impl Game for Starship {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Linux" => install_flat_release(archive, dest, "starship.appimage"),
+            "Linux" => linux::install_appimage_release(archive, dest, "starship.appimage"),
             other => Err(anyhow!(
                 "Starship: unsupported platform keyword {other} (Linux-only in v1)"
             )),

@@ -4,12 +4,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
-/// Universal flat-zip installer: unzip the archive directly into `dest` and
-/// chmod `binary_name` (if present) to 0o755. Used by every game's Linux path
-/// and by SpaghettiKart's macOS path — anything where the release is a flat
-/// zip with a known executable at the root, alongside data files the game
-/// reads at runtime (`gamecontrollerdb.txt`, `assets/`, etc.).
-pub fn install_flat_release(archive: &Path, dest: &Path, binary_name: &str) -> Result<()> {
+/// Internal helper shared by `platform::linux::install_appimage_release` and
+/// `platform::macos::install_flat_binary_release`: unzip the archive directly
+/// into `dest` and chmod `binary_name` (if present) to 0o755. Game extract
+/// dispatchers should call the per-platform wrapper, not this directly.
+pub(crate) fn install_flat_zip(archive: &Path, dest: &Path, binary_name: &str) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
     unzip(archive, dest).with_context(|| format!("unzip {}", archive.display()))?;
 

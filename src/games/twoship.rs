@@ -5,8 +5,7 @@ use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::install_flat_release;
-use crate::platform::{Platform, macos};
+use crate::platform::{Platform, linux, macos};
 
 pub const SLOT_MM: &str = "mm";
 
@@ -82,7 +81,7 @@ impl Game for TwoShip {
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
             "Mac" => macos::install_app_in_dmg_release(archive, dest),
-            "Linux" => install_flat_release(archive, dest, "2ship.appimage"),
+            "Linux" => linux::install_appimage_release(archive, dest, "2ship.appimage"),
             other => Err(anyhow!("2Ship: unsupported platform keyword {other}")),
         }
     }

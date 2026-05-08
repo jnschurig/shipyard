@@ -55,3 +55,10 @@ pub fn install_app_in_dmg_release(_archive: &Path, _dest: &Path) -> Result<()> {
         "DMG-based macOS installs are only supported when running on macOS"
     ))
 }
+
+/// Install a macOS release whose layout is a flat zip (binary + data files at
+/// the root, no `.app` bundle, no DMG — SpaghettiKart pattern). Unzips into
+/// `dest` and chmods the named binary.
+pub fn install_flat_binary_release(archive: &Path, dest: &Path, binary_name: &str) -> Result<()> {
+    crate::library::extract::install_flat_zip(archive, dest, binary_name)
+}

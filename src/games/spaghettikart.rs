@@ -5,8 +5,7 @@ use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::install_flat_release;
-use crate::platform::Platform;
+use crate::platform::{Platform, linux, macos};
 
 pub const SLOT_MK64: &str = "mk64";
 
@@ -88,9 +87,9 @@ impl Game for SpaghettiKart {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Linux" => install_flat_release(archive, dest, "spaghetti.appimage"),
+            "Linux" => linux::install_appimage_release(archive, dest, "spaghetti.appimage"),
             // Mac release is a flat zip (binary + assets at root, no .app, no DMG).
-            "Mac" => install_flat_release(archive, dest, "Spaghettify"),
+            "Mac" => macos::install_flat_binary_release(archive, dest, "Spaghettify"),
             other => Err(anyhow!(
                 "SpaghettiKart: unsupported platform keyword {other}"
             )),
