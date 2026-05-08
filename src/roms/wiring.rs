@@ -270,20 +270,64 @@ mod tests {
         assert!(install.join("game.exe").exists());
     }
 
+    /// Fake game that opts into `requires_rom_copy()` — no shipping game
+    /// uses copy mode today, so we exercise the path with a local stub.
+    struct CopyingGame;
+    impl Game for CopyingGame {
+        fn slug(&self) -> &'static str {
+            "copygame"
+        }
+        fn repo_slug(&self) -> &'static str {
+            "x/y"
+        }
+        fn display_name(&self) -> &'static str {
+            "Copy"
+        }
+        fn data_dir(&self, install_dir: &Path, _: &dyn Platform) -> PathBuf {
+            install_dir.to_path_buf()
+        }
+        fn slots(&self) -> &'static [SlotSpec] {
+            const S: &[SlotSpec] = &[SlotSpec {
+                id: "primary",
+                display_name: "Primary",
+                symlink_filename: "rom.z64",
+            }];
+            S
+        }
+        fn cached_assets(&self) -> &'static [CachedAssetSpec] {
+            &[]
+        }
+        fn requires_rom_copy(&self) -> bool {
+            true
+        }
+        fn pick_asset<'a>(
+            &self,
+            a: &'a [ReleaseAsset],
+            _: &dyn Platform,
+        ) -> Option<&'a ReleaseAsset> {
+            a.first()
+        }
+        fn launch_command(&self, _: &Path, _: &dyn Platform) -> Command {
+            Command::new("/bin/true")
+        }
+        fn extract(&self, _: &Path, _: &Path, _: &dyn Platform) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn copies_rom_when_game_requires_copy() {
-        use crate::games::ghostship::{Ghostship, SLOT_SM64};
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
         let lib = dir.path().join("lib");
-        let target = make_rom(&lib, "sm64.z64");
+        let target = make_rom(&lib, "rom.z64");
 
         let mut config = Config::default();
-        config.set_assignment("ghostship", SLOT_SM64, Some("sm64.z64".into()));
-        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
+        config.set_assignment("copygame", "primary", Some("rom.z64".into()));
+        reconcile(&install, &CopyingGame, &FakePlatform, &config, &lib).unwrap();
 
-        let placed = install.join("sm64.z64");
+        let placed = install.join("rom.z64");
         assert!(placed.is_file());
         assert!(!placed.is_symlink());
         assert_eq!(fs::read(&placed).unwrap(), fs::read(&target).unwrap());
@@ -291,21 +335,20 @@ mod tests {
 
     #[test]
     fn copy_reconcile_is_idempotent_and_replaces_stale_symlink() {
-        use crate::games::ghostship::{Ghostship, SLOT_SM64};
         let dir = tempdir().unwrap();
         let install = dir.path().join("install");
         fs::create_dir_all(&install).unwrap();
         let lib = dir.path().join("lib");
-        make_rom(&lib, "sm64.z64");
+        make_rom(&lib, "rom.z64");
         // Stale symlink left behind from a prior symlink-mode reconcile.
-        std::os::unix::fs::symlink(lib.join("sm64.z64"), install.join("sm64.z64")).unwrap();
+        std::os::unix::fs::symlink(lib.join("rom.z64"), install.join("rom.z64")).unwrap();
 
         let mut config = Config::default();
-        config.set_assignment("ghostship", SLOT_SM64, Some("sm64.z64".into()));
-        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
-        reconcile(&install, &Ghostship, &FakePlatform, &config, &lib).unwrap();
+        config.set_assignment("copygame", "primary", Some("rom.z64".into()));
+        reconcile(&install, &CopyingGame, &FakePlatform, &config, &lib).unwrap();
+        reconcile(&install, &CopyingGame, &FakePlatform, &config, &lib).unwrap();
 
-        let placed = install.join("sm64.z64");
+        let placed = install.join("rom.z64");
         assert!(placed.is_file());
         assert!(!placed.is_symlink());
     }
