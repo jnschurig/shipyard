@@ -39,9 +39,9 @@ impl App {
         let mut body: iced::widget::Column<'_, Message> = column![import_btn].spacing(12);
 
         let expander_label = if self.imported_roms_expanded {
-            format!("▾ Imported Roms ({})", self.roms.len())
+            format!("v Imported Roms ({})", self.roms.len())
         } else {
-            format!("▸ Imported Roms ({})", self.roms.len())
+            format!("> Imported Roms ({})", self.roms.len())
         };
         body = body.push(
             button(text(expander_label).size(14)).on_press(Message::ToggleImportedRomsExpander),

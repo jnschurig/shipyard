@@ -30,7 +30,7 @@ impl std::fmt::Display for VersionChoice {
             f.write_str(" (latest)")?;
         }
         if self.installed {
-            f.write_str(" ✓")?;
+            f.write_str(" (installed)")?;
         }
         Ok(())
     }
@@ -98,7 +98,12 @@ impl App {
         if !installing && selected_version.is_some() {
             primary = primary.on_press(Message::PrimaryActionClicked(slug.clone()));
         }
-        let gear = button(text("⚙").size(16)).on_press(Message::ToggleGearMenu(slug.clone()));
+        let gear = button(
+            text(iced_fonts::Bootstrap::Gear.to_string())
+                .font(iced_fonts::BOOTSTRAP_FONT)
+                .size(16),
+        )
+        .on_press(Message::ToggleGearMenu(slug.clone()));
 
         let label = text(game.display_name())
             .size(14)
