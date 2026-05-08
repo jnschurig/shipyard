@@ -1,12 +1,11 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::unzip;
+use crate::library::extract::install_flat_release;
 use crate::platform::Platform;
 
 pub const SLOT_MK64: &str = "mk64";
@@ -89,8 +88,9 @@ impl Game for SpaghettiKart {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Linux" => extract_linux(archive, dest),
-            "Mac" => extract_mac(archive, dest),
+            "Linux" => install_flat_release(archive, dest, "spaghetti.appimage"),
+            // Mac release is a flat zip (binary + assets at root, no .app, no DMG).
+            "Mac" => install_flat_release(archive, dest, "Spaghettify"),
             other => Err(anyhow!(
                 "SpaghettiKart: unsupported platform keyword {other}"
             )),
@@ -98,46 +98,12 @@ impl Game for SpaghettiKart {
     }
 }
 
-/// Unzip the entire release into `dest` and chmod the appimage. See SoH for
-/// rationale (preserves bundled `gamecontrollerdb.txt`).
-fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    unzip(archive, dest).context("unzip spaghettikart release")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dest.join("spaghetti.appimage");
-        if bin.exists() {
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
-        }
-    }
-    Ok(())
-}
-
-/// SpaghettiKart's Mac zip is a flat layout (binary `Spaghettify` plus assets
-/// at the archive root, no `.app` bundle, no DMG). Just unzip into dest and
-/// make the binary executable.
-fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    unzip(archive, dest).context("unzip spaghettikart mac release")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dest.join("Spaghettify");
-        if bin.exists() {
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::{linux::Linux, macos::MacOs};
     use std::collections::HashSet;
+    use std::fs;
     use std::io::Write;
     use tempfile::tempdir;
 

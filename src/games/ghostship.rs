@@ -1,13 +1,12 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::unzip;
-use crate::platform::Platform;
+use crate::library::extract::install_flat_release;
+use crate::platform::{Platform, macos};
 
 pub const SLOT_SM64: &str = "sm64";
 
@@ -81,53 +80,11 @@ impl Game for Ghostship {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Mac" => extract_mac(archive, dest),
-            "Linux" => extract_linux(archive, dest),
+            "Mac" => macos::install_app_in_dmg_release(archive, dest),
+            "Linux" => install_flat_release(archive, dest, "ghostship.appimage"),
             other => Err(anyhow!("Ghostship: unsupported platform keyword {other}")),
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
-    use crate::library::extract::{copy_dir_recursive, find_first_with_ext, mount_dmg};
-
-    let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
-    unzip(archive, scratch.path()).context("unzip ghostship release")?;
-
-    let dmg = find_first_with_ext(scratch.path(), "dmg")?;
-    let mount = mount_dmg(&dmg)?;
-
-    let app = find_first_with_ext(&mount.mount_point, "app")?;
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    let target = dest.join(app.file_name().unwrap());
-    copy_dir_recursive(&app, &target)
-        .with_context(|| format!("copy {} -> {}", app.display(), target.display()))?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn extract_mac(_archive: &Path, _dest: &Path) -> Result<()> {
-    Err(anyhow!(
-        "Ghostship macOS extraction is only available on macOS"
-    ))
-}
-
-/// Unzip the entire release into `dest` and chmod the appimage. See SoH for
-/// rationale (preserves bundled `gamecontrollerdb.txt`, asset trees, etc.).
-fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    unzip(archive, dest).context("unzip ghostship release")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dest.join("ghostship.appimage");
-        if bin.exists() {
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -135,6 +92,7 @@ mod tests {
     use super::*;
     use crate::platform::{linux::Linux, macos::MacOs};
     use std::collections::HashSet;
+    use std::fs;
     use std::io::Write;
     use tempfile::tempdir;
 

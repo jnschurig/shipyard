@@ -1,12 +1,11 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::unzip;
+use crate::library::extract::install_flat_release;
 use crate::platform::Platform;
 
 pub const SLOT_SF64_US: &str = "sf64-us";
@@ -105,7 +104,7 @@ impl Game for Starship {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Linux" => extract_linux(archive, dest),
+            "Linux" => install_flat_release(archive, dest, "starship.appimage"),
             other => Err(anyhow!(
                 "Starship: unsupported platform keyword {other} (Linux-only in v1)"
             )),
@@ -113,31 +112,12 @@ impl Game for Starship {
     }
 }
 
-/// Starship's Linux zip is a flat layout (appimage at root alongside an
-/// `assets/yaml/...` tree, `config.yml`, `gamecontrollerdb.txt`, `mods/`, and
-/// `readme.txt`) and the game reads those data files at runtime — copying just
-/// the appimage causes `AudioLoad_Init` to SIGSEGV after the user picks a ROM.
-/// Extract the whole archive into the install dir, then chmod the appimage.
-fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    unzip(archive, dest).context("unzip starship release")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dest.join("starship.appimage");
-        if bin.exists() {
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::{linux::Linux, macos::MacOs};
     use std::collections::HashSet;
+    use std::fs;
     use std::io::Write;
     use tempfile::tempdir;
 

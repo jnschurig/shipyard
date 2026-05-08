@@ -1,13 +1,12 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::unzip;
-use crate::platform::Platform;
+use crate::library::extract::install_flat_release;
+use crate::platform::{Platform, macos};
 
 pub const SLOT_OOT: &str = "oot";
 pub const SLOT_OOT_MQ: &str = "oot-mq";
@@ -91,53 +90,11 @@ impl Game for Soh {
 
     fn extract(&self, archive: &Path, dest: &Path, platform: &dyn Platform) -> Result<()> {
         match platform.asset_keyword() {
-            "Mac" => extract_mac(archive, dest),
-            "Linux" => extract_linux(archive, dest),
+            "Mac" => macos::install_app_in_dmg_release(archive, dest),
+            "Linux" => install_flat_release(archive, dest, "soh.appimage"),
             other => Err(anyhow!("SoH: unsupported platform keyword {other}")),
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
-    use crate::library::extract::{copy_dir_recursive, find_first_with_ext, mount_dmg};
-
-    let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
-    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
-
-    let dmg = find_first_with_ext(scratch.path(), "dmg")?;
-    let mount = mount_dmg(&dmg)?;
-
-    let app = find_first_with_ext(&mount.mount_point, "app")?;
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    let target = dest.join(app.file_name().unwrap());
-    copy_dir_recursive(&app, &target)
-        .with_context(|| format!("copy {} -> {}", app.display(), target.display()))?;
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn extract_mac(_archive: &Path, _dest: &Path) -> Result<()> {
-    Err(anyhow!("SoH macOS extraction is only available on macOS"))
-}
-
-/// Unzip the entire release into `dest` and chmod the appimage. Linux releases
-/// often ship companion files (e.g. `gamecontrollerdb.txt`, asset trees) that
-/// the game reads at runtime — extracting just the appimage strips them and
-/// causes runtime crashes or controller warnings.
-fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    unzip(archive, dest).context("unzip soh release")?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dest.join("soh.appimage");
-        if bin.exists() {
-            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
