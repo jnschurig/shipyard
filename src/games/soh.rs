@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::{find_first_with_ext, unzip};
+use crate::library::extract::unzip;
 use crate::platform::Platform;
 
 pub const SLOT_OOT: &str = "oot";
@@ -100,7 +100,7 @@ impl Game for Soh {
 
 #[cfg(target_os = "macos")]
 fn extract_mac(archive: &Path, dest: &Path) -> Result<()> {
-    use crate::library::extract::{copy_dir_recursive, mount_dmg};
+    use crate::library::extract::{copy_dir_recursive, find_first_with_ext, mount_dmg};
 
     let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
     unzip(archive, scratch.path()).context("unzip outer wrapper")?;

@@ -39,6 +39,8 @@ pub fn unzip(archive: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Find the first direct child of `dir` whose extension (case-insensitive) matches `ext`.
+/// Used by macOS DMG/.app extraction; gated since Linux builds don't need it.
+#[cfg(target_os = "macos")]
 pub fn find_first_with_ext(dir: &Path, ext: &str) -> Result<PathBuf> {
     for entry in fs::read_dir(dir)? {
         let e = entry?;
