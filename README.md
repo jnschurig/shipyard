@@ -31,6 +31,20 @@ End-to-end manual install against a real GitHub release:
 cargo run --example real_install -- [--launch] [--mq] <rom_path>
 ```
 
+### Git hooks
+
+Hooks live in `.pre-commit-config.yaml`. `cargo fmt` and `cargo clippy` run on
+`pre-commit`; `cargo test --lib` runs on `pre-push`. Install for every stage the
+config uses:
+
+```sh
+# prek (https://github.com/j178/prek)
+prek install --hook-type pre-commit --hook-type pre-push --overwrite
+
+# pre-commit (https://pre-commit.com)
+pre-commit install --hook-type pre-commit --hook-type pre-push --overwrite
+```
+
 ## Using Shipyard
 
 1. Pick a game from the picker at the top of the window.
