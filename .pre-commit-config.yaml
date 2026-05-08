@@ -1,9 +1,15 @@
 repos:
-  - repo: local
-    hooks:
-      - id: cargo-fmt
-        name: cargo fmt
-        entry: cargo fmt --all -- --check
-        language: system
-        types: [rust]
-        pass_filenames: false
+- repo: local
+  hooks:
+  - id: cargo-fmt
+    name: cargo fmt
+    entry: cargo fmt --all -- --check
+    language: system
+    types: [rust]
+    pass_filenames: false
+
+- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+  rev: v2.14.0
+  hooks:
+  - id: pretty-format-yaml
+    args: [--autofix, --indent, '2']

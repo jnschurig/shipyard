@@ -17,33 +17,33 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Install Linux system deps (iced/wgpu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev libxkbcommon-dev libwayland-dev \
-            libvulkan-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+    - name: Install Linux system deps (iced/wgpu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgtk-3-dev libxkbcommon-dev libwayland-dev \
+          libvulkan-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+        restore-keys: ${{ runner.os }}-cargo-
 
-      - name: cargo build
-        run: cargo build --verbose
+    - name: cargo build
+      run: cargo build --verbose
 
-      - name: cargo test
-        run: cargo test --verbose
+    - name: cargo test
+      run: cargo test --verbose
 
-      - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+    - name: cargo clippy
+      run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
+    - name: cargo fmt
+      run: cargo fmt --all -- --check
