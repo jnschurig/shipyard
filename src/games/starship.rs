@@ -9,16 +9,39 @@ use crate::github::ReleaseAsset;
 use crate::library::extract::{find_first_with_ext_recursive, unzip};
 use crate::platform::Platform;
 
-pub const SLOT_SF64: &str = "sf64";
+pub const SLOT_SF64_US: &str = "sf64-us";
+pub const SLOT_SF64_EU: &str = "sf64-eu";
+pub const SLOT_SF64_JP: &str = "sf64-jp";
 
-const SLOTS: &[SlotSpec] = &[SlotSpec {
-    id: SLOT_SF64,
-    display_name: "Star Fox 64",
-    symlink_filename: "sf64.z64",
-}];
+// Per upstream: a US ROM is required (it's what generates `sf64.o2r`); EU and
+// JP ROMs are optional voice-language replacements layered on top of US, and
+// only one voice replacement may be active at a time. We expose all three as
+// independent slots so users can wire whichever ROMs they own; Starship itself
+// shows a file picker at first launch, so the symlink filenames don't need to
+// match any particular convention — they just need to be distinct.
+const SLOTS: &[SlotSpec] = &[
+    SlotSpec {
+        id: SLOT_SF64_US,
+        display_name: "Star Fox 64 (US)",
+        symlink_filename: "sf64-us.z64",
+    },
+    SlotSpec {
+        id: SLOT_SF64_EU,
+        display_name: "Star Fox 64 (EU voice)",
+        symlink_filename: "sf64-eu.z64",
+    },
+    SlotSpec {
+        id: SLOT_SF64_JP,
+        display_name: "Star Fox 64 (JP voice)",
+        symlink_filename: "sf64-jp.z64",
+    },
+];
 
+// Only the US slot has a known cached-asset filename. EU/JP voice ROMs may or
+// may not produce additional .o2r files — upstream docs are silent and we
+// don't have ROMs to verify. Add entries here if/when that's confirmed.
 const CACHED_ASSETS: &[CachedAssetSpec] = &[CachedAssetSpec {
-    slot_id: SLOT_SF64,
+    slot_id: SLOT_SF64_US,
     filenames: &["sf64.o2r"],
 }];
 
@@ -153,12 +176,21 @@ mod tests {
     }
 
     #[test]
-    fn slots_returns_single_sf64_slot() {
+    fn slots_returns_three_region_slots() {
         let slots = Starship.slots();
-        assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].id, SLOT_SF64);
-        assert_eq!(slots[0].symlink_filename, "sf64.z64");
-        assert_eq!(slots[0].display_name, "Star Fox 64");
+        assert_eq!(slots.len(), 3);
+        let ids: Vec<&str> = slots.iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![SLOT_SF64_US, SLOT_SF64_EU, SLOT_SF64_JP]);
+        let symlinks: Vec<&str> = slots.iter().map(|s| s.symlink_filename).collect();
+        assert_eq!(symlinks, vec!["sf64-us.z64", "sf64-eu.z64", "sf64-jp.z64"]);
+    }
+
+    #[test]
+    fn cached_asset_only_attached_to_us_slot() {
+        let cached = Starship.cached_assets();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].slot_id, SLOT_SF64_US);
+        assert_eq!(cached[0].filenames, &["sf64.o2r"]);
     }
 
     #[test]
