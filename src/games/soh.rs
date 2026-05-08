@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 
 use super::{CachedAssetSpec, Game, SlotSpec};
 use crate::github::ReleaseAsset;
-use crate::library::extract::{find_first_with_ext, find_first_with_ext_recursive, unzip};
+use crate::library::extract::{find_first_with_ext, unzip};
 use crate::platform::Platform;
 
 pub const SLOT_OOT: &str = "oot";
@@ -121,19 +121,21 @@ fn extract_mac(_archive: &Path, _dest: &Path) -> Result<()> {
     Err(anyhow!("SoH macOS extraction is only available on macOS"))
 }
 
+/// Unzip the entire release into `dest` and chmod the appimage. Linux releases
+/// often ship companion files (e.g. `gamecontrollerdb.txt`, asset trees) that
+/// the game reads at runtime — extracting just the appimage strips them and
+/// causes runtime crashes or controller warnings.
 fn extract_linux(archive: &Path, dest: &Path) -> Result<()> {
-    let scratch = tempfile::tempdir().context("mktemp scratch dir")?;
-    unzip(archive, scratch.path()).context("unzip outer wrapper")?;
-
-    let appimage = find_first_with_ext_recursive(scratch.path(), "appimage")?;
     fs::create_dir_all(dest).with_context(|| format!("create dest {}", dest.display()))?;
-    let target = dest.join(appimage.file_name().unwrap());
-    fs::copy(&appimage, &target).with_context(|| format!("copy to {}", target.display()))?;
+    unzip(archive, dest).context("unzip soh release")?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+        let bin = dest.join("soh.appimage");
+        if bin.exists() {
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))?;
+        }
     }
     Ok(())
 }
@@ -230,6 +232,9 @@ mod tests {
         let target = dest.join("soh.appimage");
         assert!(target.exists());
         assert_eq!(fs::read(&target).unwrap(), b"\x7fELF-fake-appimage-body");
+        // Companion files in the zip must also land in dest (e.g.
+        // gamecontrollerdb.txt for some games, asset trees for Starship).
+        assert!(dest.join("readme.txt").exists());
 
         #[cfg(unix)]
         {

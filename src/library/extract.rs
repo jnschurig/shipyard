@@ -54,36 +54,6 @@ pub fn find_first_with_ext(dir: &Path, ext: &str) -> Result<PathBuf> {
     Err(anyhow!("no .{ext} file found in {}", dir.display()))
 }
 
-/// Recursively walk `dir` and return the first entry (file or dir) whose
-/// extension (case-insensitive) matches `ext`. Used to locate artifacts
-/// inside zips that nest the payload one folder deep (e.g. 2Ship's
-/// `2Ship-X-Linux/2ship.appimage`).
-pub fn find_first_with_ext_recursive(dir: &Path, ext: &str) -> Result<PathBuf> {
-    fn walk(dir: &Path, ext: &str) -> io::Result<Option<PathBuf>> {
-        for entry in fs::read_dir(dir)? {
-            let e = entry?;
-            let p = e.path();
-            if p.extension()
-                .and_then(|s| s.to_str())
-                .map(str::to_ascii_lowercase)
-                == Some(ext.to_ascii_lowercase())
-            {
-                return Ok(Some(p));
-            }
-            // Recurse into directories that don't themselves match (e.g. the
-            // top-level wrapper folder). `.app` bundles match via extension
-            // and are returned without descending into them.
-            if p.is_dir()
-                && let Some(found) = walk(&p, ext)?
-            {
-                return Ok(Some(found));
-            }
-        }
-        Ok(None)
-    }
-    walk(dir, ext)?.ok_or_else(|| anyhow!("no .{ext} file found under {}", dir.display()))
-}
-
 /// Recursively copy `src` to `dst` using `cp -R`. Used for `.app` bundles on macOS.
 #[cfg(unix)]
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -200,15 +170,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn find_recursive_descends_into_wrapper_folder() {
-        let dir = tempdir().unwrap();
-        let nested = dir.path().join("wrapper");
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("readme.txt"), b"x").unwrap();
-        fs::write(nested.join("payload.appimage"), b"x").unwrap();
-
-        let found = find_first_with_ext_recursive(dir.path(), "appimage").unwrap();
-        assert_eq!(found, nested.join("payload.appimage"));
-    }
 }
