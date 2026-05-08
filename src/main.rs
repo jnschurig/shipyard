@@ -18,6 +18,33 @@ fn load_window_icon() -> Option<iced::window::Icon> {
     iced::window::icon::from_rgba(pixmap.take(), ICON_RENDER_SIZE, ICON_RENDER_SIZE).ok()
 }
 
+#[cfg(target_os = "linux")]
+fn log_linux_display_backend() {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+    let x_display = std::env::var("DISPLAY").ok();
+    // winit 0.30 picks Wayland when WAYLAND_DISPLAY is set, else falls back to X11.
+    let expected = if wayland_display.is_some() {
+        "wayland"
+    } else if x_display.is_some() {
+        "x11"
+    } else {
+        "none"
+    };
+    tracing::info!(
+        xdg_session_type = %session,
+        wayland_display = ?wayland_display,
+        display = ?x_display,
+        expected_backend = expected,
+        "linux display backend",
+    );
+    if session == "wayland" && wayland_display.is_none() {
+        tracing::warn!(
+            "XDG_SESSION_TYPE=wayland but WAYLAND_DISPLAY is unset; winit will use X11 (XWayland)"
+        );
+    }
+}
+
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -27,6 +54,9 @@ fn main() -> iced::Result {
         .init();
 
     tracing::info!("shipyard {} starting", env!("CARGO_PKG_VERSION"));
+
+    #[cfg(target_os = "linux")]
+    log_linux_display_backend();
 
     let window_settings = iced::window::Settings {
         icon: load_window_icon(),
