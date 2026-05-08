@@ -7,7 +7,7 @@ use iced::{Element, Length, Task};
 
 use chrono::TimeZone;
 
-use crate::config::schema::{MIN_VERSIONS_TO_SHOW, RateLimitSnapshot};
+use crate::config::schema::{MIN_VERSIONS_TO_SHOW, RateLimitSnapshot, ThemePreference};
 use crate::config::{Config, Diagnostic};
 use crate::games::{self as games_mod, Game};
 use crate::github::{self, RateLimitStatus, Release};
@@ -87,6 +87,7 @@ pub enum Message {
     ToggleImportedRomsExpander,
     VersionsToShowInputChanged(String),
     VersionsToShowSubmit,
+    ThemeChanged(ThemePreference),
 }
 
 #[derive(Debug, Clone)]
@@ -377,6 +378,13 @@ impl App {
                     return Task::none();
                 };
                 self.update(Message::ClearCachedAssetsClicked(tag))
+            }
+            Message::ThemeChanged(pref) => {
+                if self.config.theme != pref {
+                    self.config.theme = pref;
+                    self.save_config();
+                }
+                Task::none()
             }
             Message::VersionsToShowInputChanged(s) => {
                 self.versions_to_show_input = s;
@@ -762,6 +770,17 @@ impl App {
 
     fn refresh_rom_list(&mut self) {
         self.roms = rom_library::list(&self.rom_library_root).unwrap_or_default();
+    }
+
+    pub fn theme(&self) -> iced::Theme {
+        match self.config.theme {
+            ThemePreference::Dark => iced::Theme::Dark,
+            ThemePreference::Light => iced::Theme::Light,
+            ThemePreference::System => match dark_light::detect() {
+                Ok(dark_light::Mode::Light) => iced::Theme::Light,
+                _ => iced::Theme::Dark,
+            },
+        }
     }
 
     /// Persist `self.config` to disk; on failure push an error banner. Returns

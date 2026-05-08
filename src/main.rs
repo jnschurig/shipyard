@@ -35,6 +35,7 @@ fn main() -> iced::Result {
 
     iced::application("Shipyard", app::App::update, app::App::view)
         .window(window_settings)
+        .theme(app::App::theme)
         .font(iced_fonts::BOOTSTRAP_FONT_BYTES)
         .run_with(|| {
         let platform = platform::current();

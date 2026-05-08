@@ -8,6 +8,15 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 pub const DEFAULT_VERSIONS_TO_SHOW: u32 = 10;
 pub const MIN_VERSIONS_TO_SHOW: u32 = 1;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemePreference {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LastLaunched {
     pub game_slug: String,
@@ -54,6 +63,9 @@ pub struct Config {
     /// can render quota status before any new request runs.
     #[serde(default)]
     pub rate_limit_snapshot: Option<RateLimitSnapshot>,
+
+    #[serde(default)]
+    pub theme: ThemePreference,
 }
 
 fn default_versions_to_show() -> u32 {
@@ -70,6 +82,7 @@ impl Default for Config {
             versions_to_show: DEFAULT_VERSIONS_TO_SHOW,
             last_launched: None,
             rate_limit_snapshot: None,
+            theme: ThemePreference::Dark,
         }
     }
 }

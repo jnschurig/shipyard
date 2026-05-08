@@ -1,8 +1,29 @@
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
 use crate::app::{App, Message};
+use crate::config::schema::ThemePreference;
 use crate::ui::{TABLE_ROW_PADDING, table_card_style, table_row_separator};
+
+const THEME_OPTIONS: [ThemePreference; 3] = [
+    ThemePreference::Dark,
+    ThemePreference::Light,
+    ThemePreference::System,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ThemeOption(ThemePreference);
+
+impl std::fmt::Display for ThemeOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self.0 {
+            ThemePreference::Dark => "Dark",
+            ThemePreference::Light => "Light",
+            ThemePreference::System => "System",
+        };
+        f.write_str(s)
+    }
+}
 
 const SETTINGS_LABEL_WIDTH: f32 = 200.0;
 
@@ -36,8 +57,19 @@ impl App {
             "not set"
         };
 
+        let theme_options: Vec<ThemeOption> =
+            THEME_OPTIONS.iter().copied().map(ThemeOption).collect();
+        let theme_pick = pick_list(
+            theme_options,
+            Some(ThemeOption(self.config.theme)),
+            |opt| Message::ThemeChanged(opt.0),
+        )
+        .width(Length::Fixed(160.0));
+
         let general_card = container(
             column![
+                settings_row("Theme", theme_pick.into()),
+                table_row_separator(),
                 settings_row(
                     "Versions to show",
                     row![

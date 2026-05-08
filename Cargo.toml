@@ -25,6 +25,7 @@ resvg = "0.43"
 tiny-skia = "0.11"
 usvg = "0.43"
 iced_fonts = { version = "0.2", features = ["bootstrap"] }
+dark-light = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
