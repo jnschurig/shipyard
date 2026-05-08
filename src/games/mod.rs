@@ -8,6 +8,8 @@ use crate::platform::Platform;
 
 pub mod ghostship;
 pub mod soh;
+pub mod spaghettikart;
+pub mod starship;
 pub mod twoship;
 
 /// Game-declared ROM slot. Each game owns its own slot id namespace; ids are
@@ -90,5 +92,11 @@ pub trait Game: Send + Sync {
 }
 
 pub fn registry() -> &'static [&'static dyn Game] {
-    &[&soh::Soh, &twoship::TwoShip, &ghostship::Ghostship]
+    &[
+        &soh::Soh,
+        &twoship::TwoShip,
+        &ghostship::Ghostship,
+        &starship::Starship,
+        &spaghettikart::SpaghettiKart,
+    ]
 }
