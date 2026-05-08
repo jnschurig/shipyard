@@ -118,6 +118,7 @@ mod tests {
         vec![
             asset("spaghetti-linux.zip"),
             asset("spaghetti-mac-arm64.zip"),
+            asset("spaghetti-mac-intel-x64.zip"),
             asset("spaghetti-windows.zip"),
         ]
     }

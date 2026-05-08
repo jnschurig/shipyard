@@ -7,6 +7,19 @@ repos:
     language: system
     types: [rust]
     pass_filenames: false
+  - id: cargo-clippy
+    name: cargo clippy
+    entry: cargo clippy --all-targets -- -D warnings
+    language: system
+    types: [rust]
+    pass_filenames: false
+  - id: cargo-test
+    name: cargo test --lib
+    entry: cargo test --lib
+    language: system
+    types: [rust]
+    pass_filenames: false
+    stages: [pre-push]
 
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.14.0
