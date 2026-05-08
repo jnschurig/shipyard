@@ -760,7 +760,10 @@ impl App {
         if let Some(t) = self.selected_tags.get(slug) {
             return Some(t.clone());
         }
-        self.versions_for_game(slug).into_iter().next().map(|v| v.tag)
+        self.versions_for_game(slug)
+            .into_iter()
+            .next()
+            .map(|v| v.tag)
     }
 
     pub(crate) fn install_state_for_game(&self, slug: &str) -> Option<InstallState> {

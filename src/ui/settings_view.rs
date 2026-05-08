@@ -59,11 +59,9 @@ impl App {
 
         let theme_options: Vec<ThemeOption> =
             THEME_OPTIONS.iter().copied().map(ThemeOption).collect();
-        let theme_pick = pick_list(
-            theme_options,
-            Some(ThemeOption(self.config.theme)),
-            |opt| Message::ThemeChanged(opt.0),
-        )
+        let theme_pick = pick_list(theme_options, Some(ThemeOption(self.config.theme)), |opt| {
+            Message::ThemeChanged(opt.0)
+        })
         .width(Length::Fixed(160.0));
 
         let general_card = container(
@@ -125,7 +123,9 @@ impl App {
 fn settings_row<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
     container(
         row![
-            text(label).size(13).width(Length::Fixed(SETTINGS_LABEL_WIDTH)),
+            text(label)
+                .size(13)
+                .width(Length::Fixed(SETTINGS_LABEL_WIDTH)),
             container(control).width(Length::Fill),
         ]
         .spacing(12)

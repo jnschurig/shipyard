@@ -4,9 +4,9 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
 #[cfg(target_os = "macos")]
 use anyhow::anyhow;
+use anyhow::{Context, Result};
 
 /// Internal helper shared by `platform::linux::install_appimage_release` and
 /// `platform::macos::install_flat_binary_release`: unzip the archive directly
@@ -194,5 +194,4 @@ mod tests {
             b"\x01\x02\x03"
         );
     }
-
 }
