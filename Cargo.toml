@@ -19,7 +19,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 tempfile = "3"
-sha1 = "0.10"
 rfd = "0.15"
 resvg = "0.43"
 tiny-skia = "0.11"
